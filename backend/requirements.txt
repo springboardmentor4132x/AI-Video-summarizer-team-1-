@@ -1,0 +1,8 @@
+fastapi
+pydantic
+pydantic-settings
+email-validator
+passlib[bcrypt]
+python-jose[cryptography]
+pytest
+httpx
