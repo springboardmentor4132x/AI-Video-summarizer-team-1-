@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 import pytest
 from fastapi.testclient import TestClient
 from datetime import timedelta, datetime, timezone
@@ -5,8 +6,10 @@ from jose import jwt
 
 from app.main import app
 from app.core.config import settings
-from app.core.security import create_access_token
+from app.core.security import create_access_token, get_password_hash, verify_password
 from app.schemas.user import UserRole
+from fastapi import Depends
+from app.dependencies.auth import require_role
 
 client = TestClient(app)
 
@@ -58,3 +61,42 @@ def test_invalid_role_in_token():
     response = client.get("/auth/test", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 401
     assert response.json()["detail"] == "Could not validate credentials"
+
+# Temporary dynamic route to test multi-role array configuration
+@app.get("/auth/test-multi-role", dependencies=[Depends(require_role([UserRole.ADMINISTRATOR, UserRole.EDUCATOR]))])
+def mock_multi_role_endpoint():
+    return {"message": "success"}
+
+def test_password_hashing():
+    plain_password = "secure_password123"
+    hash1 = get_password_hash(plain_password)
+    hash2 = get_password_hash(plain_password)
+    
+    assert hash1 != plain_password
+    assert hash1 != hash2  # Salting ensures different hashes for the same password
+
+def test_password_verification():
+    plain_password = "secure_password123"
+    hashed_password = get_password_hash(plain_password)
+    
+    assert verify_password(plain_password, hashed_password) is True
+    assert verify_password("wrong_password", hashed_password) is False
+
+def test_valid_user_multi_role_accepted():
+    expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode = {"exp": expire, "sub": "1", "role": UserRole.EDUCATOR}
+    token = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    
+    response = client.get("/auth/test-multi-role", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert response.json()["message"] == "success"
+
+def test_valid_user_multi_role_forbidden():
+    expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode = {"exp": expire, "sub": "1", "role": UserRole.LEARNER}
+    token = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    
+    response = client.get("/auth/test-multi-role", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operation not permitted"
+

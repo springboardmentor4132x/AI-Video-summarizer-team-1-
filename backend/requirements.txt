@@ -1,8 +1,9 @@
 fastapi
+uvicorn
 pydantic
 pydantic-settings
 email-validator
-passlib[bcrypt]
+bcrypt
 python-jose[cryptography]
 pytest
 httpx
