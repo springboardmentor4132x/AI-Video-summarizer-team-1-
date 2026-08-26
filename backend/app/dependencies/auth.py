@@ -3,23 +3,23 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
+from sqlalchemy.orm import Session
+
 from app.core.security import decode_access_token
 from app.schemas.user import UserRole
+from app.db.session import get_db
+from app.models.user import User
 
-# Pretend the login endpoint is at /login for OpenAPI/Swagger scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+# Pretend the login endpoint is at /auth/login for OpenAPI/Swagger scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-# TEMPORARY MOCK USER CLASS
-# Represents the authenticated user until the actual DB User model is implemented by Member 2.
-class TempUser(BaseModel):
-    id: int
-    email: str
-    role: UserRole
-
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> TempUser:
+async def get_current_user(
+    token: str = Depends(oauth2_scheme), 
+    db: Session = Depends(get_db)
+) -> User:
     """
-    Extracts the JWT token, verifies it, and returns the authenticated user identity.
-    Returns 401 if the token is missing, invalid, or expired.
+    Extracts the JWT token, verifies it, and returns the authenticated user identity from the database.
+    Returns 401 if the token is missing, invalid, expired, or the user is not found.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -27,39 +27,24 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TempUser:
         headers={"WWW-Authenticate": "Bearer"},
     )
     
-    # 1 & 2: Extract and verify JWT
     payload = decode_access_token(token)
-    
-    # 3: Reject invalid/expired tokens
     if payload is None:
         raise credentials_exception
     
-    # 4: Extract the user identity
     user_id_str = payload.get("sub")
     if user_id_str is None:
         raise credentials_exception
         
-    # --- FUTURE DB INTEGRATION POINT ---
-    # When Member 2 finishes the PostgreSQL User model and DB Session setup, replace this mock with:
-    # 
-    # db_session = next(get_db())
-    # user = db_session.query(User).filter(User.id == int(user_id_str)).first()
-    # if user is None:
-    #     raise credentials_exception
-    # return user
-    # -----------------------------------
-    
-    # 5: Return temporary identity
     try:
-        # For testing RBAC, we extract 'role' from the JWT payload if present.
-        # Otherwise, default to LEARNER.
-        role_value = payload.get("role", UserRole.LEARNER)
-        role = UserRole(role_value)
         user_id = int(user_id_str)
-        return TempUser(id=user_id, email=f"user{user_id}@example.com", role=role)
     except ValueError:
-        # Will trigger if user_id is not int or role is invalid according to Enum
         raise credentials_exception
+        
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise credentials_exception
+        
+    return user
 
 def require_role(allowed_roles: Union[UserRole, List[UserRole]]):
     """
@@ -70,10 +55,21 @@ def require_role(allowed_roles: Union[UserRole, List[UserRole]]):
     if isinstance(allowed_roles, UserRole) or isinstance(allowed_roles, str):
         allowed_roles = [allowed_roles]
         
-    def role_checker(current_user: TempUser = Depends(get_current_user)):
-        # Separation of Concerns: Authentication is already done by get_current_user.
-        # This function only performs Authorization.
-        if current_user.role not in allowed_roles:
+    def role_checker(current_user: User = Depends(get_current_user)):
+        # Normalize the database string role to Title Case to compare with UserRole Enum
+        user_role_normalized = current_user.role.title() if isinstance(current_user.role, str) else current_user.role
+        
+        try:
+            # Safely attempt to parse as UserRole
+            enum_role = UserRole(user_role_normalized)
+        except ValueError:
+            # If the database contains an invalid role not in our Enum
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Operation not permitted"
+            )
+            
+        if enum_role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Operation not permitted"

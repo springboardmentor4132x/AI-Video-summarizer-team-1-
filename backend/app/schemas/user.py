@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from enum import Enum
 from datetime import datetime
 
@@ -12,6 +12,13 @@ class UserBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
     role: UserRole
+
+    @field_validator('role', mode='before')
+    @classmethod
+    def normalize_role(cls, v):
+        if isinstance(v, str):
+            return v.title()
+        return v
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)

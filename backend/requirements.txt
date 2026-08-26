@@ -7,3 +7,5 @@ bcrypt
 python-jose[cryptography]
 pytest
 httpx
+sqlalchemy
+psycopg2-binary
