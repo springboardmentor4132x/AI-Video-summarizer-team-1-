@@ -2,6 +2,14 @@ import subprocess
 from pathlib import Path
 
 
+def remove_output_file(output_file: Path) -> None:
+    """Remove an incomplete output file without masking the original failure."""
+    try:
+        output_file.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def process_video(input_path: str, output_path: str) -> bool:
     """
     Process a video using FFmpeg.
@@ -16,7 +24,8 @@ def process_video(input_path: str, output_path: str) -> bool:
     input_file = Path(input_path)
     output_file = Path(output_path)
 
-    if not input_file.exists():
+    if not input_file.is_file():
+        remove_output_file(output_file)
         return False
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -41,7 +50,12 @@ def process_video(input_path: str, output_path: str) -> bool:
             text=True,
         )
 
-        return result.returncode == 0
+        if result.returncode == 0:
+            return True
+
+        remove_output_file(output_file)
+        return False
 
     except (OSError, subprocess.SubprocessError):
+        remove_output_file(output_file)
         return False
