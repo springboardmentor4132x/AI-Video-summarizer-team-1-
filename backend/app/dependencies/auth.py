@@ -10,8 +10,8 @@ from app.schemas.user import UserRole
 from app.db.session import get_db
 from app.models.user import User
 
-# Pretend the login endpoint is at /auth/login for OpenAPI/Swagger scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+# OAuth2 clients (including Swagger UI) submit username/password form data here.
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme), 

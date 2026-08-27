@@ -128,6 +128,51 @@ def test_login_nonexistent_email():
     )
     assert response.status_code == 401
 
+
+def test_oauth2_token_success():
+    db = TestingSessionLocal()
+    create_test_user(db, email="oauth@example.com", password="password123")
+    db.close()
+
+    response = client.post(
+        "/auth/token",
+        data={"username": "oauth@example.com", "password": "password123"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["token_type"] == "bearer"
+    assert response.json()["access_token"]
+
+
+def test_oauth2_token_invalid_credentials():
+    db = TestingSessionLocal()
+    create_test_user(db, email="oauth-invalid@example.com", password="password123")
+    db.close()
+
+    response = client.post(
+        "/auth/token",
+        data={"username": "oauth-invalid@example.com", "password": "wrongpassword"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_oauth2_token_authenticates_me():
+    db = TestingSessionLocal()
+    create_test_user(db, email="oauth-me@example.com", password="password123")
+    db.close()
+
+    token_response = client.post(
+        "/auth/token",
+        data={"username": "oauth-me@example.com", "password": "password123"},
+    )
+    token = token_response.json()["access_token"]
+
+    response = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    assert response.json()["email"] == "oauth-me@example.com"
+
 # --- Auth / get_current_user Tests ---
 
 def test_auth_missing_jwt():
