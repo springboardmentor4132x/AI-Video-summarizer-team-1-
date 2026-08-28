@@ -101,19 +101,21 @@ def process_video_background(video_id: int, input_path: str, output_path: str):
             db.commit()
             return
 
-        transcript = (
-            db.query(Transcript)
-            .filter(Transcript.video_id == video.id)
-            .first()
-        )
-        if transcript is None:
-            transcript = Transcript(video_id=video.id)
-            db.add(transcript)
+        # transcript = (
+        #     db.query(Transcript)
+        #     .filter(Transcript.video_id == video.id)
+        #     .first()
+        # )
+        # if transcript is None:
+        #     transcript = Transcript(video_id=video.id)
+        #     db.add(transcript)
 
-        transcript.full_text = transcription.text
-        transcript.segments = transcription.segments
-        transcript.language = transcription.language or "en"
-        transcript.edited = False
+        # transcript.full_text = transcription.text
+        # transcript.segments = transcription.segments
+        # transcript.language = transcription.language or "en"
+        # transcript.edited = False
+# TODO: Member 2 will inject MongoDB transcript insertion here
+# await mongo_client.save_transcript(video.id, transcription)
 
         video.status = "completed"
 
