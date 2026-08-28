@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -6,15 +7,19 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db
 from app.dependencies.auth import get_current_user
+from app.models.transcript import Transcript
 from app.models.video import Video
 from app.schemas.video import VideoResponse, VideoStatusResponse
-from app.services.ffmpeg_service import process_video
+from app.services.ffmpeg_service import extract_audio, process_video
+from app.services.transcription_service import transcribe_audio
 
 
 router = APIRouter(
     prefix="/videos",
     tags=["videos"],
 )
+
+logger = logging.getLogger(__name__)
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -47,6 +52,7 @@ def process_video_background(video_id: int, input_path: str, output_path: str):
     db = SessionLocal()
 
     succeeded = False
+    audio_path = None
 
     try:
         video = db.query(Video).filter(Video.id == video_id).first()
@@ -62,10 +68,54 @@ def process_video_background(video_id: int, input_path: str, output_path: str):
             output_path=output_path,
         )
 
-        if succeeded:
-            video.status = "completed"
-        else:
+        if not succeeded:
             video.status = "failed"
+            db.commit()
+            return
+
+        audio_path = UPLOAD_DIR / f"{uuid4()}_transcription.wav"
+        extraction = extract_audio(
+            video_path=input_path,
+            audio_path=str(audio_path),
+        )
+
+        if extraction.status != "completed" or not extraction.audio_path:
+            logger.warning(
+                "Audio extraction failed for video %s: %s",
+                video_id,
+                extraction.error_code,
+            )
+            video.status = "completed"
+            db.commit()
+            return
+
+        transcription = transcribe_audio(extraction.audio_path)
+
+        if transcription.status != "completed":
+            logger.warning(
+                "Transcription failed for video %s: %s",
+                video_id,
+                transcription.error_code,
+            )
+            video.status = "completed"
+            db.commit()
+            return
+
+        transcript = (
+            db.query(Transcript)
+            .filter(Transcript.video_id == video.id)
+            .first()
+        )
+        if transcript is None:
+            transcript = Transcript(video_id=video.id)
+            db.add(transcript)
+
+        transcript.full_text = transcription.text
+        transcript.segments = transcription.segments
+        transcript.language = transcription.language or "en"
+        transcript.edited = False
+
+        video.status = "completed"
 
         db.commit()
 
@@ -82,6 +132,8 @@ def process_video_background(video_id: int, input_path: str, output_path: str):
             db.rollback()
 
     finally:
+        if audio_path is not None:
+            remove_file(audio_path)
         if not succeeded:
             remove_file(output_path)
         db.close()

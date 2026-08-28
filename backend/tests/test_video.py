@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base, get_db
 from app.main import app
+from app.models.transcript import Transcript
 from app.models.user import User
 from app.models.video import Video
 from app.routers import video as video_router
@@ -211,3 +212,135 @@ def test_background_processing_updates_video_status(monkeypatch, tmp_path, ffmpe
     db.close()
     assert observed_statuses == ["processing"]
     assert processed.status == expected_status
+
+
+def test_background_processing_creates_and_updates_one_transcript(monkeypatch, tmp_path):
+    user = create_user("transcript-owner@example.com")
+    db = TestingSessionLocal()
+    video = Video(user_id=user.id, filename="video.mp4", file_path="input.mp4", status="uploaded")
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    video_id = video.id
+    db.close()
+    monkeypatch.setattr(video_router, "SessionLocal", TestingSessionLocal)
+    transcript_texts = iter(["First transcript", "Updated transcript"])
+
+    monkeypatch.setattr(video_router, "process_video", lambda **_kwargs: True)
+
+    def fake_extract_audio(video_path, audio_path):
+        Path(audio_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(audio_path).write_bytes(b"audio")
+        return SimpleNamespace(status="completed", audio_path=audio_path)
+
+    def fake_transcribe_audio(_audio_path):
+        return SimpleNamespace(
+            status="completed",
+            text=next(transcript_texts),
+            segments=[{"text": "segment"}],
+            language="en",
+        )
+
+    monkeypatch.setattr(video_router, "extract_audio", fake_extract_audio)
+    monkeypatch.setattr(video_router, "transcribe_audio", fake_transcribe_audio)
+
+    video_router.process_video_background(
+        video_id,
+        str(tmp_path / "input.mp4"),
+        str(tmp_path / "output.mp4"),
+    )
+    video_router.process_video_background(
+        video_id,
+        str(tmp_path / "input.mp4"),
+        str(tmp_path / "output.mp4"),
+    )
+
+    db = TestingSessionLocal()
+    transcripts = db.query(Transcript).filter(Transcript.video_id == video_id).all()
+    db.close()
+    assert len(transcripts) == 1
+    assert transcripts[0].full_text == "Updated transcript"
+    assert transcripts[0].segments == [{"text": "segment"}]
+    assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
+
+
+def test_background_processing_handles_audio_extraction_failure(monkeypatch, tmp_path):
+    user = create_user("audio-failure@example.com")
+    db = TestingSessionLocal()
+    video = Video(user_id=user.id, filename="video.mp4", file_path="input.mp4", status="uploaded")
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    video_id = video.id
+    db.close()
+    monkeypatch.setattr(video_router, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(video_router, "process_video", lambda **_kwargs: True)
+
+    def failed_extract(video_path, audio_path):
+        Path(audio_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(audio_path).write_bytes(b"partial")
+        return SimpleNamespace(
+            status="failed",
+            audio_path=None,
+            error_code="ffmpeg_failed",
+        )
+
+    monkeypatch.setattr(video_router, "extract_audio", failed_extract)
+    monkeypatch.setattr(
+        video_router,
+        "transcribe_audio",
+        lambda _audio_path: (_ for _ in ()).throw(AssertionError("transcription should not run")),
+    )
+
+    video_router.process_video_background(
+        video_id,
+        str(tmp_path / "input.mp4"),
+        str(tmp_path / "output.mp4"),
+    )
+
+    db = TestingSessionLocal()
+    processed = db.get(Video, video_id)
+    transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
+    db.close()
+    assert processed.status == "completed"
+    assert transcript is None
+    assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
+
+
+def test_background_processing_handles_transcription_failure(monkeypatch, tmp_path):
+    user = create_user("transcription-failure@example.com")
+    db = TestingSessionLocal()
+    video = Video(user_id=user.id, filename="video.mp4", file_path="input.mp4", status="uploaded")
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    video_id = video.id
+    db.close()
+    monkeypatch.setattr(video_router, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(video_router, "process_video", lambda **_kwargs: True)
+
+    def successful_extract(video_path, audio_path):
+        Path(audio_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(audio_path).write_bytes(b"audio")
+        return SimpleNamespace(status="completed", audio_path=audio_path)
+
+    monkeypatch.setattr(video_router, "extract_audio", successful_extract)
+    monkeypatch.setattr(
+        video_router,
+        "transcribe_audio",
+        lambda _audio_path: SimpleNamespace(status="failed", error_code="transcription_failed"),
+    )
+
+    video_router.process_video_background(
+        video_id,
+        str(tmp_path / "input.mp4"),
+        str(tmp_path / "output.mp4"),
+    )
+
+    db = TestingSessionLocal()
+    processed = db.get(Video, video_id)
+    transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
+    db.close()
+    assert processed.status == "completed"
+    assert transcript is None
+    assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
