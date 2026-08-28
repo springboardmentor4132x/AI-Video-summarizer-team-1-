@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+email-validator
+bcrypt
+python-jose[cryptography]
+pytest
+httpx
+alembic==1.19.1
+greenlet==3.5.5
+Mako==1.4.1
+MarkupSafe==3.0.3
+psycopg2-binary==2.9.12
+python-dotenv==1.2.3
+SQLAlchemy==2.0.52
+typing_extensions==4.16.0

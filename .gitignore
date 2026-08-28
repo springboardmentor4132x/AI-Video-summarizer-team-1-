@@ -1,6 +1,19 @@
+# Frontend (Node.js/Next.js)
 node_modules/
 dist/
+.vscode/
+
+# Backend (Python/FastAPI)
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Environment Variables
 .env
 .env.*
 !.env.example
-.vscode/
+
+# Test databases
+*.sqlite
+*.db
