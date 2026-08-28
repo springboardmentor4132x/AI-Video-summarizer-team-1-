@@ -149,6 +149,7 @@ def process_video(input_path: str, output_path: str) -> bool:
             command,
             capture_output=True,
             text=True,
+            timeout=600,
         )
 
         if result.returncode == 0:
