@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db
 from app.dependencies.auth import get_current_user
-from app.models.transcript import Transcript
 from app.models.video import Video
 from app.schemas.video import VideoResponse, VideoStatusResponse
 from app.services.ffmpeg_service import extract_audio, process_video
