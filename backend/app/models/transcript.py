@@ -25,3 +25,4 @@ class Transcript(Base):
     # Relationships
     video = relationship("Video", back_populates="transcript")
     summary = relationship("Summary", back_populates="transcript", uselist=False, cascade="all, delete-orphan")
+    
