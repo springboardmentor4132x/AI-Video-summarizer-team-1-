@@ -18,3 +18,4 @@ class Video(Base):
     
     # Relationship to Transcript (one video → one transcript)
     transcript = relationship("Transcript", back_populates="video", uselist=False, cascade="all, delete-orphan")
+    key_moments = relationship("KeyMoment",back_populates="video",cascade="all, delete-orphan")
