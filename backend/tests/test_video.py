@@ -109,6 +109,16 @@ def test_upload_requires_bearer_token():
     assert response.status_code == 401
 
 
+def test_upload_invalid_token_returns_401():
+    response = client.post(
+        "/videos/upload",
+        files={"file": ("video.mp4", b"data", "video/mp4")},
+        headers={"Authorization": "Bearer invalid_token"}
+    )
+
+    assert response.status_code == 401
+
+
 def test_authenticated_upload_streams_and_creates_owned_record(monkeypatch):
     user = create_user("owner@example.com")
     use_current_user(user)
@@ -145,6 +155,21 @@ def test_upload_size_limit_removes_partial_file(monkeypatch):
 
     assert response.status_code == 413
     assert not video_router.UPLOAD_DIR.exists() or not list(video_router.UPLOAD_DIR.glob("*"))
+
+
+def test_status_requires_bearer_token():
+    response = client.get("/videos/1/status")
+
+    assert response.status_code == 401
+
+
+def test_status_invalid_token_returns_401():
+    response = client.get(
+        "/videos/1/status",
+        headers={"Authorization": "Bearer invalid_token"}
+    )
+
+    assert response.status_code == 401
 
 
 def test_status_endpoint_returns_owned_video_status():
