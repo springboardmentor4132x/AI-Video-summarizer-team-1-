@@ -1,1 +1,22 @@
+# Test video files
+test_input.mp4
+test_output.mp4
+
+# Frontend
+node_modules/
+dist/
+.vscode/
+
+venv/
+test_input.mp4
+test_output.mp4
+__pycache__/
+*.pyc
+.pytest_cache/
 .env
+
+# Test databases
+*.sqlite
+*.db
+# Local uploaded/processed videos
+backend/uploads/

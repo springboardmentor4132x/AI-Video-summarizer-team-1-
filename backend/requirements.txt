@@ -1,3 +1,13 @@
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+email-validator
+bcrypt
+python-jose[cryptography]
+python-multipart
+pytest
+httpx
 alembic==1.19.1
 greenlet==3.5.5
 Mako==1.4.1

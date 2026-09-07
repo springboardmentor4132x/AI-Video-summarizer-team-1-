@@ -3,7 +3,6 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 
-
 class User(Base):
     __tablename__ = "users"
 
@@ -13,4 +12,7 @@ class User(Base):
     password = Column(String, nullable=False)
     role = Column(String, nullable=False, default="learner")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Add this relationship (links User to Videos)
     videos = relationship("Video", back_populates="user", cascade="all, delete-orphan")
+    
