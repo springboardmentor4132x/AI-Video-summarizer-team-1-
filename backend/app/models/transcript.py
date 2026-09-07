@@ -1,10 +1,11 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum,JSON
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 import enum
 
 class TranscriptStatus(str, enum.Enum):
+    PENDING = "PENDING"
     NOT_STARTED = "NOT_STARTED"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
@@ -15,6 +16,8 @@ class Transcript(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     text = Column(Text, nullable=True)
+    language = Column(String(10), nullable=True)  # ✅ NEW: e.g., "en", "es", "fr"
+    segments = Column(JSON, nullable=True) 
     status = Column(Enum(TranscriptStatus), default=TranscriptStatus.NOT_STARTED)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
