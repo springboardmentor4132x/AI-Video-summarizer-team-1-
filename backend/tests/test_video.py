@@ -309,7 +309,8 @@ def test_background_processing_handles_audio_extraction_failure(monkeypatch, tmp
     transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
     db.close()
     assert processed.status == "completed"
-    assert transcript is None
+    assert transcript is not None
+    assert transcript.status.value == "FAILED"
     assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
 
 def test_background_processing_handles_transcription_failure(monkeypatch, tmp_path):
@@ -347,7 +348,8 @@ def test_background_processing_handles_transcription_failure(monkeypatch, tmp_pa
     transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
     db.close()
     assert processed.status == "completed"
-    assert transcript is None
+    assert transcript is not None
+    assert transcript.status.value == "FAILED"
     assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
 def test_background_processing_creates_key_moments(
     monkeypatch,

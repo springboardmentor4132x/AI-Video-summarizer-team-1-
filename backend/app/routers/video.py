@@ -72,6 +72,19 @@ def process_video_background(
             logger.error("Video %s not found", video_id)
             return
 
+        transcript = (
+            db.query(Transcript)
+            .filter(Transcript.video_id == video.id)
+            .first()
+        )
+        if transcript is None:
+            transcript = Transcript(
+                video_id=video.id,
+                status=TranscriptStatus.PENDING,
+            )
+            db.add(transcript)
+            db.flush()
+
         video.status = "processing"
         db.commit()
 
@@ -81,9 +94,13 @@ def process_video_background(
         )
         if not succeeded:
             logger.error("Video processing failed for video %s", video_id)
+            transcript.status = TranscriptStatus.FAILED
             video.status = "failed"
             db.commit()
             return
+
+        transcript.status = TranscriptStatus.PROCESSING
+        db.commit()
 
         audio_path = UPLOAD_DIR / f"{uuid4()}_transcription.wav"
         extraction = extract_audio(
@@ -96,6 +113,7 @@ def process_video_background(
                 video_id,
                 extraction.error_code,
             )
+            transcript.status = TranscriptStatus.FAILED
             video.status = "completed"
             db.commit()
             return
@@ -107,25 +125,16 @@ def process_video_background(
                 video_id,
                 transcription.error_code,
             )
+            transcript.status = TranscriptStatus.FAILED
             video.status = "completed"
             db.commit()
             return
 
-        transcript = (
-            db.query(Transcript)
-            .filter(Transcript.video_id == video.id)
-            .first()
-        )
-        if transcript is None:
-            transcript = Transcript(video_id=video.id)
-            db.add(transcript)
-
         transcript.text = transcription.text
-        transcript.language = transcription.language or "en"
-        transcript.segments = transcription.segments or []
+        transcript.language = transcription.language
+        transcript.segments = transcription.segments
         transcript.status = TranscriptStatus.COMPLETED
         db.flush()
-
         summary = (
             db.query(Summary)
             .filter(Summary.transcript_id == transcript.id)
@@ -196,6 +205,11 @@ def process_video_background(
         logger.exception("Unexpected error while processing video %s", video_id)
         db.rollback()
         try:
+            transcript = (
+                db.query(Transcript)
+                .filter(Transcript.video_id == video_id)
+                .first()
+            )
             if transcript is not None:
                 transcript.status = TranscriptStatus.FAILED
             video = db.query(Video).filter(Video.id == video_id).first()
