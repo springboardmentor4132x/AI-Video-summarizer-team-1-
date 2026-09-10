@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.video import get_owned_video
 from app.models.video import Video
 from app.models.key_moment import KeyMoment
 from app.schemas.key_moment import KeyMomentsResponse
@@ -22,32 +22,16 @@ router = APIRouter(
     response_model=KeyMomentsResponse,
 )
 def get_key_moments(
-    video_id: int,
+    video: Video = Depends(get_owned_video),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
 ):
     """
     Return detected key moments for a video owned by the current user.
     """
 
-    video = (
-        db.query(Video)
-        .filter(
-            Video.id == video_id,
-            Video.user_id == current_user.id,
-        )
-        .first()
-    )
-
-    if video is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Video not found",
-        )
-
     moments = (
         db.query(KeyMoment)
-        .filter(KeyMoment.video_id == video_id)
+        .filter(KeyMoment.video_id == video.id)
         .order_by(KeyMoment.start_time)
         .all()
     )
@@ -86,10 +70,9 @@ def get_key_moments(
     "/{video_id}/highlights/{moment_id}",
 )
 def get_highlight(
-    video_id: int,
     moment_id: int,
+    video: Video = Depends(get_owned_video),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
 ):
     """
     Serve the generated highlight video for a key moment.
@@ -97,26 +80,11 @@ def get_highlight(
     The video and key moment must belong to the authenticated user.
     """
 
-    video = (
-        db.query(Video)
-        .filter(
-            Video.id == video_id,
-            Video.user_id == current_user.id,
-        )
-        .first()
-    )
-
-    if video is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Video not found",
-        )
-
     moment = (
         db.query(KeyMoment)
         .filter(
             KeyMoment.id == moment_id,
-            KeyMoment.video_id == video_id,
+            KeyMoment.video_id == video.id,
         )
         .first()
     )
@@ -145,4 +113,4 @@ def get_highlight(
         path=highlight_path,
         media_type="video/mp4",
         filename=highlight_path.name,
-    )
+    )
