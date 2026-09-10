@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 load_dotenv()
 from app.models.user import User
 from app.models.video import Video
+from app.models.transcript import Transcript
+from app.models.summary import Summary
+from app.models.key_moment import KeyMoment
 from app.db.session import Base
 
 # this is the Alembic Config object, which provides

@@ -5,6 +5,7 @@ from app.db.session import Base
 import enum
 
 class SummaryStatus(str, enum.Enum):
+    NOT_STARTED = "NOT_STARTED"
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
@@ -16,7 +17,7 @@ class Summary(Base):
     id = Column(Integer, primary_key=True, index=True)
     short_summary = Column(Text, nullable=True)
     detailed_summary = Column(Text, nullable=True)
-    status = Column(Enum(SummaryStatus), default=SummaryStatus.PENDING)
+    status = Column(Enum(SummaryStatus), default=SummaryStatus.NOT_STARTED)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
