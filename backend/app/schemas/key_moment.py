@@ -1,8 +1,9 @@
 from pydantic import BaseModel, ConfigDict
+from uuid import UUID
 
 
 class KeyMomentResponse(BaseModel):
-    id: int
+    id: UUID
     start_time: float
     end_time: float
     title: str
@@ -15,6 +16,6 @@ class KeyMomentResponse(BaseModel):
 
 
 class KeyMomentsResponse(BaseModel):
-    video_id: int
+    video_id: UUID
     status: str
     key_moments: list[KeyMomentResponse]

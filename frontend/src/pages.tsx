@@ -11,7 +11,6 @@ const dashboardConfig: Record<Role, { kicker: string; title: string; description
     kicker: "Creator studio", title: "Turn every upload into a sharper story.", description: "Your production desk for managing videos, monitoring processing, and keeping a clean publishing trail.", accent: "coral",
     actions: [
       { label: "Upload Video", detail: "Start a new media upload", icon: Video, route: "/creator/upload", endpoint: "/rbac/creator/uploads" },
-      { label: "Manage Videos", detail: "Review your video library", icon: Library, route: "/creator/videos", endpoint: "/rbac/creator/uploads" },
       { label: "Transcripts", detail: "Generate and edit transcripts", icon: FileClock, route: "/creator/transcripts", endpoint: "/rbac/creator/uploads" },
       { label: "Upload History", detail: "Trace every file event", icon: FileClock, route: "/creator/history", endpoint: "/rbac/creator/history" },
       { label: "Processing Status", detail: "Watch jobs move forward", icon: Gauge, route: "/creator/processing", endpoint: "/rbac/creator/uploads" },
@@ -148,7 +147,7 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
     setLoading(true);
     setError(null);
     getUploadHistory(token, administrator)
-      .then(setEvents)
+      .then(events => setEvents(events.map(video => ({ id: video.id, video_id: video.id, filename: video.filename, owner_id: "", owner_name: "", status: video.processing_status, timestamp: video.uploaded_at, notes: null })) ))
       .catch(reason => setError(reason instanceof Error ? reason.message : "Upload history could not be loaded."))
       .finally(() => setLoading(false));
   }, [administrator, token]);
@@ -170,7 +169,7 @@ export function ProcessingStatusPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  return <section className="simple-page status-page"><span className="eyebrow">Creator studio</span><h1>Processing status</h1><p className="feature-description">Track the current lifecycle state of your uploaded videos. AI processing is not started by this view.</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading current statuses...</div>}{error && <div className="notice" role="alert">{error}</div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">Nothing processing</span><h2>No uploaded videos yet</h2><p>Upload a video to begin tracking its lifecycle.</p></div>}{!loading && !error && videos.length > 0 && <div className="status-list">{videos.map(video => <article className="status-card" key={video.id}><div><strong>{video.filename}</strong><small>Updated {new Date(video.updated_at).toLocaleString()}</small></div><span className={`event-status ${video.processing_status.toLowerCase()}`}>{video.processing_status}</span><p>{video.latest_note ?? "No status notes yet."}</p></article>)}</div>}</section>;
+  return <section className="simple-page status-page"><span className="eyebrow">Creator studio</span><h1>Processing status</h1><p className="feature-description">Track the current lifecycle state of your uploaded videos.</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading current statuses...</div>}{error && <div className="notice" role="alert">{error}</div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">Nothing processing</span><h2>No uploaded videos yet</h2><p>Upload a video to begin tracking its lifecycle.</p></div>}{!loading && !error && videos.length > 0 && <div className="status-list">{videos.map(video => <article className="status-card" key={video.id}><div><strong>{video.id}</strong></div><span className={`event-status ${video.processing_status.toLowerCase()}`}>{video.processing_status}</span></article>)}</div>}</section>;
 }
 
 export function VideoLibraryPage({ heading, description }: { heading: string; description: string }) {
@@ -190,7 +189,11 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
 
   useEffect(() => { void loadVideos(); }, [token]);
 
-   return <section className="simple-page library-page"><span className="eyebrow">Video library</span><h1>{heading}</h1><p className="feature-description">{description}</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading videos...</div>}{error && <div className="notice" role="alert">{error}<button className="text-button" onClick={() => void loadVideos()}>Try again</button></div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">No videos available</span><h2>Your library is empty</h2><p>Uploaded videos will appear here with their processing status.</p></div>}{!loading && !error && videos.length > 0 && <div className="video-grid">{videos.map(video => <article className="video-card" key={video.id}><div className="video-card-top"><Video size={20} /><span className={`event-status ${video.processing_status.toLowerCase()}`}>{video.processing_status}</span></div><h2>{video.filename}</h2><p>{video.owner_name} · {(video.file_size_bytes / (1024 * 1024)).toFixed(2)} MB</p><small>{video.duration_seconds ? `${video.duration_seconds}s` : "Duration pending"} · Uploaded {new Date(video.uploaded_at).toLocaleDateString()}</small>{user && <TranscriptPanel videoId={video.id} ownerId={video.owner_id} filename={video.filename} />}</article>)}</div>}</section>;
+   return <section className="simple-page library-page"><span className="eyebrow">Video library</span><h1>{heading}</h1><p className="feature-description">{description}</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading videos...</div>}{error && <div className="notice" role="alert">{error}<button className="text-button" onClick={() => void loadVideos()}>Try again</button></div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">No videos available</span><h2>Your library is empty</h2><p>Uploaded videos will appear here with their processing status.</p></div>}{!loading && !error && videos.length > 0 && <div className="video-grid">{videos.map(video => <article className="video-card" key={video.id}><div className="video-card-top"><Video size={20} /><span className={`event-status ${video.processing_status.toLowerCase()}`}>{video.processing_status}</span></div><h2>{video.filename}</h2><p>{(video.file_size_bytes / (1024 * 1024)).toFixed(2)} MB</p><small>{video.duration_seconds ? `${video.duration_seconds}s` : "Duration pending"} · Uploaded {new Date(video.uploaded_at).toLocaleDateString()}</small>{user && <TranscriptPanel videoId={video.id} />}</article>)}</div>}</section>;
+}
+
+export function TranscriptPage() {
+  return <section className="simple-page library-page"><span className="eyebrow">Video transcripts</span><h1>Video transcripts</h1><p className="feature-description">Transcript records will appear here when the backend exposes the authenticated video and transcript routes.</p><div className="feature-placeholder"><span className="eyebrow">No transcripts available yet</span><h2>Transcript access is not enabled</h2><p>The current backend accepts video uploads and reports processing status, but it does not provide a video list or transcript retrieval endpoint yet.</p><Link className="primary-button" to="/creator/upload">Upload a video</Link></div></section>;
 }
 
 export function DashboardRedirect() {

@@ -1,19 +1,22 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
 
 class VideoResponse(BaseModel):
-    id: int
+    id: UUID
     filename: str
-    status: str
+    mime_type: str
+    file_size_bytes: int
+    processing_status: str
     uploaded_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class VideoStatusResponse(BaseModel):
-    id: int
-    status: str
+    id: UUID
+    processing_status: str
 
     model_config = ConfigDict(from_attributes=True)

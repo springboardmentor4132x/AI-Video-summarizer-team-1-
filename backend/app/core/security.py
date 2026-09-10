@@ -1,11 +1,20 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Union, Optional
 import bcrypt
+from argon2 import PasswordHasher
+from argon2.exceptions import VerificationError
 from jose import jwt, JWTError
 from app.core.config import settings
 
+argon2_hasher = PasswordHasher()
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verifies a plaintext password against a hashed password."""
+    if hashed_password.startswith("$argon2"):
+        try:
+            return argon2_hasher.verify(hashed_password, plain_password)
+        except VerificationError:
+            return False
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 def get_password_hash(password: str) -> str:

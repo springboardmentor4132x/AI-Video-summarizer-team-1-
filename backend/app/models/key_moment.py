@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, Float, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Float, String, Text, DateTime, ForeignKey, Uuid
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
+from uuid import uuid4
 
 from app.db.session import Base
 
@@ -8,10 +9,10 @@ from app.db.session import Base
 class KeyMoment(Base):
     __tablename__ = "key_moments"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid4, index=True)
 
     video_id = Column(
-        Integer,
+        Uuid(as_uuid=True),
         ForeignKey("videos.id"),
         nullable=False,
         index=True,

@@ -4,7 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./features/auth/AuthContext";
-import { Dashboard, DashboardRedirect, Login, ProcessingStatusPage, Profile, Register, RoleFeaturePage, UploadHistoryPage, VideoLibraryPage, VideoUploadPage } from "./pages";
+import { Dashboard, DashboardRedirect, Login, ProcessingStatusPage, Profile, Register, RoleFeaturePage, TranscriptPage, UploadHistoryPage, VideoLibraryPage, VideoUploadPage } from "./pages";
 import "./styles/global.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -20,8 +20,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route element={<ProtectedRoute allowedRoles={["Content Creator"]} />}>
                 <Route path="/dashboard/content-creator" element={<Dashboard />} />
                 <Route path="/creator/upload" element={<VideoUploadPage />} />
-                <Route path="/creator/videos" element={<VideoLibraryPage heading="Manage videos" description="Review the videos you have uploaded and their current processing state." />} />
-                <Route path="/creator/transcripts" element={<VideoLibraryPage heading="Video transcripts" description="Generate, review, edit, and download transcripts for your videos." />} />
+                <Route path="/creator/transcripts" element={<TranscriptPage />} />
                 <Route path="/creator/history" element={<UploadHistoryPage />} />
                 <Route path="/creator/processing" element={<ProcessingStatusPage />} />
               </Route>

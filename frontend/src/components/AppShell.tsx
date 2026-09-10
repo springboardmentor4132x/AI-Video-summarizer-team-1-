@@ -6,7 +6,6 @@ import type { Role } from "../types/auth";
 const roleNavigation: Record<Role, { label: string; path: string; icon: typeof Video }[]> = {
   "Content Creator": [
     { label: "Upload Video", path: "/creator/upload", icon: Upload },
-    { label: "Manage Videos", path: "/creator/videos", icon: Video },
     { label: "Transcripts", path: "/creator/transcripts", icon: Library },
     { label: "Upload History", path: "/creator/history", icon: Library },
     { label: "Processing Status", path: "/creator/processing", icon: Gauge },

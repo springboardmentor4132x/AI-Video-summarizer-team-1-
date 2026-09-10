@@ -4,6 +4,7 @@ pydantic
 pydantic-settings
 email-validator
 bcrypt
+argon2-cffi
 python-jose[cryptography]
 python-multipart
 pytest

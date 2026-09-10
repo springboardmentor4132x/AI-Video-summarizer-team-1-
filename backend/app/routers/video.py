@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
@@ -55,11 +55,7 @@ def remove_file(path: Path | str) -> None:
         pass
 
 
-def process_video_background(
-    video_id: int,
-    input_path: str,
-    output_path: str,
-):
+def process_video_background(video_id: UUID, input_path: str, output_path: str):
     """Run the video, transcript, key-moment, and highlight pipeline."""
     db = SessionLocal()
     succeeded = False
@@ -72,7 +68,16 @@ def process_video_background(
             logger.error("Video %s not found", video_id)
             return
 
-        video.status = "processing"
+        video.processing_status = "PROCESSING"
+        transcript = (
+            db.query(Transcript)
+            .filter(Transcript.video_id == video.id)
+            .first()
+        )
+        if transcript is None:
+            transcript = Transcript(video_id=video.id)
+            db.add(transcript)
+        transcript.status = TranscriptStatus.PROCESSING
         db.commit()
 
         succeeded = process_video(
@@ -81,7 +86,7 @@ def process_video_background(
         )
         if not succeeded:
             logger.error("Video processing failed for video %s", video_id)
-            video.status = "failed"
+            video.processing_status = "FAILED"
             db.commit()
             return
 
@@ -96,7 +101,13 @@ def process_video_background(
                 video_id,
                 extraction.error_code,
             )
-            video.status = "completed"
+            transcript = transcript or Transcript(
+                video_id=video.id,
+                status=TranscriptStatus.FAILED,
+            )
+            db.add(transcript)
+            transcript.status = TranscriptStatus.FAILED
+            video.processing_status = "FAILED"
             db.commit()
             return
 
@@ -107,7 +118,16 @@ def process_video_background(
                 video_id,
                 transcription.error_code,
             )
-            video.status = "completed"
+            transcript = (
+                db.query(Transcript)
+                .filter(Transcript.video_id == video.id)
+                .first()
+            )
+            if transcript is None:
+                transcript = Transcript(video_id=video.id)
+                db.add(transcript)
+            transcript.status = TranscriptStatus.FAILED
+            video.processing_status = "FAILED"
             db.commit()
             return
 
@@ -144,7 +164,8 @@ def process_video_background(
 
         segments = transcript.segments
         if not segments:
-            video.status = "completed"
+            video.processing_status = "COMPLETED"
+            succeeded = True
             db.commit()
             return
 
@@ -189,7 +210,8 @@ def process_video_background(
                     result.error_code,
                 )
 
-        video.status = "completed"
+        video.processing_status = "COMPLETED"
+        succeeded = True
         db.commit()
 
     except Exception:
@@ -200,7 +222,7 @@ def process_video_background(
                 transcript.status = TranscriptStatus.FAILED
             video = db.query(Video).filter(Video.id == video_id).first()
             if video:
-                video.status = "failed"
+                video.processing_status = "FAILED"
                 db.commit()
         except Exception:
             db.rollback()
@@ -271,11 +293,14 @@ async def upload_video(
     finally:
         await file.close()
 
+    storage_key = f"videos/{current_user.id}/{input_path.name}"
     video = Video(
         user_id=current_user.id,
         filename=original_filename,
-        file_path=str(input_path),
-        status="uploaded",
+        storage_key=storage_key,
+        mime_type=file.content_type or "application/octet-stream",
+        file_size_bytes=total_size,
+        processing_status="UPLOADED",
     )
     try:
         db.add(video)
@@ -304,7 +329,7 @@ async def upload_video(
     response_model=VideoStatusResponse,
 )
 def get_video_status(
-    video_id: int,
+    video_id: UUID,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -320,3 +345,42 @@ def get_video_status(
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video
+
+
+@router.get("/", response_model=list[VideoResponse])
+def list_videos(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.created_at.desc())
+        .all()
+    )
+
+
+@router.get("/status", response_model=list[VideoStatusResponse])
+def list_video_statuses(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.updated_at.desc())
+        .all()
+    )
+
+
+@router.get("/history", response_model=list[VideoResponse])
+def list_video_history(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.uploaded_at.desc())
+        .all()
+    )

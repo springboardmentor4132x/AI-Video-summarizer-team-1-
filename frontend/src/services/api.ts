@@ -22,10 +22,7 @@ export interface UploadHistoryEvent {
 
 export interface VideoStatus {
   id: string;
-  filename: string;
   processing_status: string;
-  updated_at: string;
-  latest_note: string | null;
 }
 
 export interface VideoListItem {
@@ -36,46 +33,44 @@ export interface VideoListItem {
   duration_seconds: number | null;
   processing_status: string;
   uploaded_at: string;
-  owner_id: string;
-  owner_name: string;
 }
 
 export interface TranscriptSegment {
-  start_time: number;
-  end_time: number;
+  start: number;
+  end: number;
   text: string;
 }
 
 export interface Transcript {
-  id: string;
+  id: number;
   video_id: string;
   text: string;
   segments: TranscriptSegment[];
   language: string | null;
   status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
-  error_message: string | null;
   created_at: string;
-  updated_at: string;
+  updated_at: string | null;
 }
 
 export interface Summary {
-  id: string;
-  video_id: string;
-  content: string;
+  id: number;
+  transcript_id: number;
+  short_summary: string | null;
+  detailed_summary: string | null;
+  status: "NOT_STARTED" | "PROCESSING" | "COMPLETED" | "FAILED";
   created_at: string;
-  updated_at: string;
+  updated_at: string | null;
 }
 
 export interface KeyMoment {
-  id: string;
-  video_id: string;
+  id: number;
   start_time: number;
   end_time: number;
   title: string;
-  description: string;
+  topic: string | null;
   importance_score: number;
-  transcript_text: string;
-  created_at: string;
+  text: string;
+  highlight_path: string | null;
 }
 
 export interface RegistrationPayload {
@@ -95,12 +90,11 @@ export class ApiError extends Error {
 
 const API_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-export function getVideoMediaUrl(videoId: string, userId: string, filename: string) {
-  const extension = filename.includes(".") ? filename.slice(filename.lastIndexOf(".")) : "";
-  return `${API_URL}/media/videos/${userId}/${videoId}${extension}`;
-}
-
 async function responseError(response: Response, fallback: string) {
+  if (response.status === 401 || response.status === 403) return "Your session has expired. Please sign in again.";
+  if (response.status === 404) return "Transcript information is not available for this video yet.";
+  if (response.status === 422) return "Invalid request. Please try again.";
+  if (response.status >= 500) return "The backend encountered an error. Please try again.";
   const body = await response.text();
   if (!body) return fallback;
   try {
@@ -120,8 +114,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   try {
     response = await fetch(`${API_URL}${path}`, { ...options, headers });
   } catch (reason) {
-    const detail = reason instanceof Error ? reason.message : "The request could not be sent.";
-    throw new ApiError(0, `Cannot reach the backend at ${API_URL}. ${detail}`);
+    throw new ApiError(0, `Cannot reach the backend at ${API_URL}.`);
   }
   if (!response.ok) {
     throw new ApiError(response.status, await responseError(response, `Request failed (${response.status})`));
@@ -139,7 +132,12 @@ export function login(email: string, password: string) {
 export function register(payload: RegistrationPayload) {
   return request<{ id: string; email: string; role: string }>("/auth/register", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      name: payload.full_name,
+      email: payload.email,
+      role: payload.role,
+      password: payload.password,
+    }),
   });
 }
 
@@ -166,7 +164,7 @@ export function uploadVideo(token: string, file: File) {
 }
 
 export function getUploadHistory(token: string, administrator = false) {
-  return request<UploadHistoryEvent[]>(administrator ? "/admin/upload-history" : "/videos/history", {
+  return request<VideoUploadResponse[]>("/videos/history", {
     headers: { Authorization: `Bearer ${token}` },
   });
 }
@@ -189,55 +187,28 @@ export function getTranscript(token: string, videoId: string) {
   });
 }
 
-export function generateTranscript(token: string, videoId: string) {
-  return request<Transcript>(`/videos/${videoId}/transcript`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-}
-
-export function updateTranscript(token: string, videoId: string, text: string) {
-  return request<Transcript>(`/videos/${videoId}/transcript`, {
-    method: "PATCH",
-    headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ text }),
-  });
-}
-
 export function getSummary(token: string, videoId: string) {
   return request<Summary>(`/videos/${videoId}/summary`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
-export function generateSummary(token: string, videoId: string, regenerate = false) {
-  const query = regenerate ? "?regenerate=true" : "";
-  return request<Summary>(`/videos/${videoId}/summary${query}`, {
+export function generateSummary(token: string, videoId: string) {
+  return request<Summary>(`/videos/${videoId}/summary`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
 export function getKeyMoments(token: string, videoId: string) {
-  return request<KeyMoment[]>(`/videos/${videoId}/key-moments`, {
+  return request<{ video_id: string; status: string; key_moments: KeyMoment[] }>(`/videos/${videoId}/key-moments`, {
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }).then(result => result.key_moments);
 }
 
-export function generateKeyMoments(token: string, videoId: string) {
-  return request<KeyMoment[]>(`/videos/${videoId}/key-moments/generate`, {
+export function retrySummary(token: string, videoId: string) {
+  return request<Summary>(`/videos/${videoId}/summary/retry`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
-}
-
-export async function downloadTranscript(token: string, videoId: string) {
-  const response = await fetch(`${API_URL}/videos/${videoId}/transcript/download`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new ApiError(response.status, body.detail ?? "Transcript download failed");
-  }
-  return response.blob();
 }

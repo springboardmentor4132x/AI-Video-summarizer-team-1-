@@ -1,17 +1,18 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import Optional
 from enum import Enum
+from uuid import UUID
 
 class SummaryStatusEnum(str, Enum):
-    PENDING = "PENDING"
+    NOT_STARTED = "NOT_STARTED"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
 # Request Schemas
 class SummaryCreate(BaseModel):
-    transcript_id: int
+    transcript_id: UUID
 
 class SummaryUpdate(BaseModel):
     short_summary: Optional[str] = None
@@ -20,18 +21,17 @@ class SummaryUpdate(BaseModel):
 
 # Response Schemas
 class SummaryResponse(BaseModel):
-    id: int
-    transcript_id: int
+    id: UUID
+    transcript_id: UUID
     short_summary: Optional[str] = None
     detailed_summary: Optional[str] = None
     status: SummaryStatusEnum
     created_at: datetime
     updated_at: Optional[datetime] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SummaryWithTranscriptResponse(SummaryResponse):
     transcript_text: Optional[str] = None
-    video_id: Optional[int] = None
+    video_id: Optional[UUID] = None
     

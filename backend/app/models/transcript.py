@@ -7,9 +7,11 @@ from sqlalchemy import (
     ForeignKey,
     Enum,
     JSON,
+    Uuid,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
+from uuid import uuid4
 
 from app.db.session import Base
 import enum
@@ -26,7 +28,7 @@ class TranscriptStatus(str, enum.Enum):
 class Transcript(Base):
     __tablename__ = "transcripts"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid4, index=True)
 
     text = Column(Text, nullable=True)
 
@@ -37,7 +39,7 @@ class Transcript(Base):
     segments = Column(JSON, nullable=True)
 
     status = Column(
-        Enum(TranscriptStatus),
+        Enum(TranscriptStatus, name="transcript_status"),
         default=TranscriptStatus.NOT_STARTED,
         nullable=False,
     )
@@ -54,7 +56,7 @@ class Transcript(Base):
 
     # One transcript per video
     video_id = Column(
-        Integer,
+        Uuid(as_uuid=True),
         ForeignKey("videos.id"),
         nullable=False,
         unique=True,

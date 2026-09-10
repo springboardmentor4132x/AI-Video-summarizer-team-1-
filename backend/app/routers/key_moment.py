@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -22,7 +23,7 @@ router = APIRouter(
     response_model=KeyMomentsResponse,
 )
 def get_key_moments(
-    video_id: int,
+    video_id: UUID,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -77,7 +78,7 @@ def get_key_moments(
 
     return {
         "video_id": video.id,
-        "status": video.status,
+        "status": video.processing_status,
         "key_moments": key_moments,
     }
 
@@ -86,7 +87,7 @@ def get_key_moments(
     "/{video_id}/highlights/{moment_id}",
 )
 def get_highlight(
-    video_id: int,
+    video_id: UUID,
     moment_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),

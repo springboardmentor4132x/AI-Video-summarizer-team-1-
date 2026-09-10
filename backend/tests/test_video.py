@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -124,14 +125,14 @@ def test_authenticated_upload_streams_and_creates_owned_record(monkeypatch):
     )
 
     assert response.status_code == 201
-    video_id = response.json()["id"]
+    video_id = UUID(response.json()["id"])
     db = TestingSessionLocal()
     video = db.get(Video, video_id)
     db.close()
     assert video.user_id == user.id
     assert video.filename == "original.MP4"
-    assert video.status == "uploaded"
-    stored_path = video_router.UPLOAD_DIR / Path(video.file_path).name
+    assert video.processing_status == "UPLOADED"
+    stored_path = video_router.UPLOAD_DIR / Path(video.storage_key).name
     assert stored_path.exists()
     assert stored_path.suffix == ".mp4"
     assert stored_path.stem != "original"
@@ -155,7 +156,7 @@ def test_status_endpoint_returns_owned_video_status():
     user = create_user("status-owner@example.com")
     use_current_user(user)
     db = TestingSessionLocal()
-    video = Video(user_id=user.id, filename="video.mp4", file_path="/tmp/video.mp4", status="processing")
+    video = Video(user_id=user.id, filename="video.mp4", storage_key=f"videos/{user.id}/{uuid4()}.mp4", mime_type="video/mp4", file_size_bytes=10, processing_status="PROCESSING")
     db.add(video)
     db.commit()
     db.refresh(video)
@@ -165,7 +166,7 @@ def test_status_endpoint_returns_owned_video_status():
     response = client.get(f"/videos/{video_id}/status")
 
     assert response.status_code == 200
-    assert response.json() == {"id": video_id, "status": "processing"}
+    assert response.json() == {"id": str(video_id), "processing_status": "PROCESSING"}
 
 
 def test_status_endpoint_hides_videos_owned_by_another_user():
@@ -173,7 +174,7 @@ def test_status_endpoint_hides_videos_owned_by_another_user():
     requester = create_user("other-user@example.com")
     use_current_user(requester)
     db = TestingSessionLocal()
-    video = Video(user_id=owner.id, filename="video.mp4", file_path="/tmp/video.mp4", status="completed")
+    video = Video(user_id=owner.id, filename="video.mp4", storage_key=f"videos/{owner.id}/{uuid4()}.mp4", mime_type="video/mp4", file_size_bytes=10, processing_status="COMPLETED")
     db.add(video)
     db.commit()
     db.refresh(video)
@@ -186,11 +187,11 @@ def test_status_endpoint_hides_videos_owned_by_another_user():
     assert response.json()["detail"] == "Video not found"
 
 
-@pytest.mark.parametrize("ffmpeg_result, expected_status", [(True, "completed"), (False, "failed")])
+@pytest.mark.parametrize("ffmpeg_result, expected_status", [(True, "COMPLETED"), (False, "FAILED")])
 def test_background_processing_updates_video_status(monkeypatch, tmp_path, ffmpeg_result, expected_status):
     user = create_user(f"processing-{ffmpeg_result}@example.com")
     db = TestingSessionLocal()
-    video = Video(user_id=user.id, filename="video.mp4", file_path="input.mp4", status="uploaded")
+    video = Video(user_id=user.id, filename="video.mp4", storage_key=f"videos/{user.id}/{uuid4()}.mp4", mime_type="video/mp4", file_size_bytes=10, processing_status="UPLOADED")
     db.add(video)
     db.commit()
     db.refresh(video)
@@ -202,24 +203,42 @@ def test_background_processing_updates_video_status(monkeypatch, tmp_path, ffmpe
     def fake_process_video(**_kwargs):
         processing_db = TestingSessionLocal()
         processing_video = processing_db.get(Video, video_id)
-        observed_statuses.append(processing_video.status)
+        observed_statuses.append(processing_video.processing_status)
         processing_db.close()
         return ffmpeg_result
 
     monkeypatch.setattr(video_router, "process_video", fake_process_video)
+    monkeypatch.setattr(
+        video_router,
+        "extract_audio",
+        lambda **_kwargs: SimpleNamespace(
+            status="completed",
+            audio_path=str(tmp_path / "audio.wav"),
+        ),
+    )
+    monkeypatch.setattr(
+        video_router,
+        "transcribe_audio",
+        lambda _audio_path: SimpleNamespace(
+            status="completed",
+            text="",
+            segments=[],
+            language="en",
+        ),
+    )
 
     video_router.process_video_background(video_id, str(tmp_path / "input.mp4"), str(tmp_path / "output.mp4"))
 
     db = TestingSessionLocal()
     processed = db.get(Video, video_id)
     db.close()
-    assert observed_statuses == ["processing"]
-    assert processed.status == expected_status
+    assert observed_statuses == ["PROCESSING"]
+    assert processed.processing_status == expected_status
 
 def test_background_processing_creates_and_updates_one_transcript(monkeypatch, tmp_path):
     user = create_user("transcript-owner@example.com")
     db = TestingSessionLocal()
-    video = Video(user_id=user.id, filename="video.mp4", file_path="input.mp4", status="uploaded")
+    video = Video(user_id=user.id, filename="video.mp4", storage_key=f"videos/{user.id}/{uuid4()}.mp4", mime_type="video/mp4", file_size_bytes=10, processing_status="UPLOADED")
     db.add(video)
     db.commit()
     db.refresh(video)
@@ -273,7 +292,7 @@ def test_background_processing_creates_and_updates_one_transcript(monkeypatch, t
 def test_background_processing_handles_audio_extraction_failure(monkeypatch, tmp_path):
     user = create_user("audio-failure@example.com")
     db = TestingSessionLocal()
-    video = Video(user_id=user.id, filename="video.mp4", file_path="input.mp4", status="uploaded")
+    video = Video(user_id=user.id, filename="video.mp4", storage_key=f"videos/{user.id}/{uuid4()}.mp4", mime_type="video/mp4", file_size_bytes=10, processing_status="UPLOADED")
     db.add(video)
     db.commit()
     db.refresh(video)
@@ -308,14 +327,15 @@ def test_background_processing_handles_audio_extraction_failure(monkeypatch, tmp
     processed = db.get(Video, video_id)
     transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
     db.close()
-    assert processed.status == "completed"
-    assert transcript is None
+    assert processed.processing_status == "FAILED"
+    assert transcript is not None
+    assert transcript.status == TranscriptStatus.FAILED
     assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
 
 def test_background_processing_handles_transcription_failure(monkeypatch, tmp_path):
     user = create_user("transcription-failure@example.com")
     db = TestingSessionLocal()
-    video = Video(user_id=user.id, filename="video.mp4", file_path="input.mp4", status="uploaded")
+    video = Video(user_id=user.id, filename="video.mp4", storage_key=f"videos/{user.id}/{uuid4()}.mp4", mime_type="video/mp4", file_size_bytes=10, processing_status="UPLOADED")
     db.add(video)
     db.commit()
     db.refresh(video)
@@ -346,8 +366,9 @@ def test_background_processing_handles_transcription_failure(monkeypatch, tmp_pa
     processed = db.get(Video, video_id)
     transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
     db.close()
-    assert processed.status == "completed"
-    assert transcript is None
+    assert processed.processing_status == "FAILED"
+    assert transcript is not None
+    assert transcript.status == TranscriptStatus.FAILED
     assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
 def test_background_processing_creates_key_moments(
     monkeypatch,
@@ -360,8 +381,10 @@ def test_background_processing_creates_key_moments(
     video = Video(
         user_id=user.id,
         filename="video.mp4",
-        file_path="input.mp4",
-        status="uploaded",
+        storage_key=f"videos/{user.id}/{uuid4()}.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=10,
+        processing_status="UPLOADED",
     )
 
     db.add(video)
@@ -520,8 +543,10 @@ def test_highlight_path_is_saved_when_extraction_succeeds(monkeypatch, tmp_path)
     video = Video(
         user_id=user.id,
         filename="video.mp4",
-        file_path="input.mp4",
-        status="uploaded",
+        storage_key=f"videos/{user.id}/{uuid4()}.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=10,
+        processing_status="UPLOADED",
     )
     db.add(video)
     db.commit()
@@ -587,8 +612,10 @@ def test_highlight_path_remains_none_when_extraction_fails(monkeypatch, tmp_path
     video = Video(
         user_id=user.id,
         filename="video.mp4",
-        file_path="input.mp4",
-        status="uploaded",
+        storage_key=f"videos/{user.id}/{uuid4()}.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=10,
+        processing_status="UPLOADED",
     )
     db.add(video)
     db.commit()
@@ -644,7 +671,7 @@ def test_highlight_path_remains_none_when_extraction_fails(monkeypatch, tmp_path
     for moment in moments:
         assert moment.highlight_path is None
     # Video processing must still complete successfully.
-    assert video_record.status == "completed"
+    assert video_record.processing_status == "COMPLETED"
 
 
 def test_key_moments_saved_when_one_highlight_fails(monkeypatch, tmp_path):
@@ -659,8 +686,10 @@ def test_key_moments_saved_when_one_highlight_fails(monkeypatch, tmp_path):
     video = Video(
         user_id=user.id,
         filename="video.mp4",
-        file_path="input.mp4",
-        status="uploaded",
+        storage_key=f"videos/{user.id}/{uuid4()}.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=10,
+        processing_status="UPLOADED",
     )
     db.add(video)
     db.commit()
@@ -730,7 +759,7 @@ def test_key_moments_saved_when_one_highlight_fails(monkeypatch, tmp_path):
         assert moment.highlight_path is None
 
     # Video processing must not be marked as failed.
-    assert video_record.status == "completed"
+    assert video_record.processing_status == "COMPLETED"
 
 
 def test_key_moment_detection_unaffected_by_highlight_mock(monkeypatch, tmp_path):
@@ -743,8 +772,10 @@ def test_key_moment_detection_unaffected_by_highlight_mock(monkeypatch, tmp_path
     video = Video(
         user_id=user.id,
         filename="video.mp4",
-        file_path="input.mp4",
-        status="uploaded",
+        storage_key=f"videos/{user.id}/{uuid4()}.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=10,
+        processing_status="UPLOADED",
     )
     db.add(video)
     db.commit()
