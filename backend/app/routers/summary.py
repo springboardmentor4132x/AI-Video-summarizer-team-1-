@@ -10,7 +10,7 @@ from app.schemas.summary import SummaryResponse
 from app.services.summarization_service import summarize_transcript
 
 
-router = APIRouter(prefix="/videos", tags=["summaries"])
+router = APIRouter(tags=["summaries"])
 
 
 def _get_owned_video(video_id: int, db: Session, current_user) -> Video:
@@ -27,7 +27,8 @@ def _get_summary(video_id: int, db: Session, current_user) -> Summary:
     return video.transcript.summary
 
 
-@router.get("/{video_id}/summary", response_model=SummaryResponse)
+@router.get("/summaries/{video_id}", response_model=SummaryResponse)
+@router.get("/videos/{video_id}/summary", response_model=SummaryResponse)
 def get_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     return _get_summary(video_id, db, current_user)
 
@@ -70,11 +71,13 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
         raise HTTPException(status_code=500, detail="Summary generation failed") from exc
 
 
-@router.post("/{video_id}/summary", response_model=SummaryResponse, status_code=status.HTTP_200_OK)
+@router.post("/summaries/{video_id}/generate", response_model=SummaryResponse, status_code=status.HTTP_200_OK)
+@router.post("/videos/{video_id}/summary", response_model=SummaryResponse, status_code=status.HTTP_200_OK)
+@router.post("/videos/{video_id}/summary/regenerate", response_model=SummaryResponse)
 def generate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     return _generate_summary(video_id, db, current_user)
 
 
-@router.post("/{video_id}/summary/regenerate", response_model=SummaryResponse)
+@router.post("/videos/{video_id}/summary/regenerate", response_model=SummaryResponse)
 def regenerate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     return _generate_summary(video_id, db, current_user, regenerate=True)

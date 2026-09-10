@@ -6,6 +6,7 @@ import enum
 
 class SummaryStatus(str, enum.Enum):
     NOT_STARTED = "NOT_STARTED"
+    PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
