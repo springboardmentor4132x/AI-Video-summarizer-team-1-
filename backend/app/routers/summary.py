@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.video import get_owned_video
 from app.models.summary import Summary, SummaryStatus
 from app.models.transcript import TranscriptStatus
 from app.models.video import Video
@@ -13,15 +13,7 @@ from app.services.summarization_service import summarize_transcript
 router = APIRouter(tags=["summaries"])
 
 
-def _get_owned_video(video_id: int, db: Session, current_user) -> Video:
-    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
-    if video is None:
-        raise HTTPException(status_code=404, detail="Video not found")
-    return video
-
-
-def _get_summary(video_id: int, db: Session, current_user) -> Summary:
-    video = _get_owned_video(video_id, db, current_user)
+def _get_summary(video: Video) -> Summary:
     if video.transcript is None or video.transcript.summary is None:
         raise HTTPException(status_code=404, detail="Summary not found")
     return video.transcript.summary
@@ -29,12 +21,11 @@ def _get_summary(video_id: int, db: Session, current_user) -> Summary:
 
 @router.get("/summaries/{video_id}", response_model=SummaryResponse)
 @router.get("/videos/{video_id}/summary", response_model=SummaryResponse)
-def get_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    return _get_summary(video_id, db, current_user)
+def get_summary(video: Video = Depends(get_owned_video)):
+    return _get_summary(video)
 
 
-def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool = False) -> Summary:
-    video = _get_owned_video(video_id, db, current_user)
+def _generate_summary(video: Video, db: Session, regenerate: bool = False) -> Summary:
     transcript = video.transcript
     if transcript is None:
         raise HTTPException(status_code=404, detail="Transcript not found")
@@ -73,11 +64,10 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
 
 @router.post("/summaries/{video_id}/generate", response_model=SummaryResponse, status_code=status.HTTP_200_OK)
 @router.post("/videos/{video_id}/summary", response_model=SummaryResponse, status_code=status.HTTP_200_OK)
-@router.post("/videos/{video_id}/summary/regenerate", response_model=SummaryResponse)
-def generate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    return _generate_summary(video_id, db, current_user)
+def generate_summary(video: Video = Depends(get_owned_video), db: Session = Depends(get_db)):
+    return _generate_summary(video, db)
 
 
 @router.post("/videos/{video_id}/summary/regenerate", response_model=SummaryResponse)
-def regenerate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    return _generate_summary(video_id, db, current_user, regenerate=True)
+def regenerate_summary(video: Video = Depends(get_owned_video), db: Session = Depends(get_db)):
+    return _generate_summary(video, db, regenerate=True)
