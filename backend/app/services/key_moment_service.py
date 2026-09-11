@@ -5,9 +5,11 @@ from dataclasses import dataclass
 import re
 from typing import Any
 
+import numpy as np
 from sqlalchemy.orm import Session
 
 from app.models.key_moment import KeyMoment as KeyMomentModel
+from app.services.embedding_service import generate_embeddings
 
 
 # Common words that are not useful as topics/keywords
@@ -73,6 +75,47 @@ STOP_WORDS = {
     "your",
 }
 
+GENERIC_TOPIC_WORDS = STOP_WORDS | {
+    "actually",
+    "also",
+    "back",
+    "come",
+    "covers",
+    "course",
+    "first",
+    "free",
+    "get",
+    "here",
+    "important",
+    "just",
+    "make",
+    "more",
+    "next",
+    "number",
+    "one",
+    "part",
+    "really",
+    "second",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "snapshot",
+    "sure",
+    "that",
+    "thing",
+    "things",
+    "this",
+    "two",
+    "useful",
+    "way",
+    "welcome",
+}
+
 
 @dataclass
 class TranscriptSegment:
@@ -89,6 +132,156 @@ class KeyMoment:
     topic: str | None
     importance_score: float
     text: str
+
+
+@dataclass
+class TranscriptChunk:
+    text: str
+    start_time: float
+    end_time: float
+    source_segment_indexes: list[int]
+
+
+@dataclass
+class TopicRegion:
+    label: str | None
+    start_time: float
+    end_time: float
+    chunks: list[TranscriptChunk]
+
+
+def _valid_timestamp(value: Any) -> bool:
+    try:
+        return np.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def segment_transcript(segments: list[TranscriptSegment | dict[str, Any]], max_chars: int = 900) -> list[TranscriptChunk]:
+    """Group ordered transcript segments without splitting sentence text."""
+    chunks: list[TranscriptChunk] = []
+    current_text: list[str] = []
+    current_indexes: list[int] = []
+    current_start: float | None = None
+    current_end: float | None = None
+
+    def flush() -> None:
+        nonlocal current_text, current_indexes, current_start, current_end
+        if current_text and current_start is not None and current_end is not None:
+            chunks.append(TranscriptChunk(" ".join(current_text), current_start, current_end, current_indexes))
+        current_text, current_indexes = [], []
+        current_start, current_end = None, None
+
+    for index, segment in enumerate(segments):
+        start = _get_segment_value(segment, "start")
+        end = _get_segment_value(segment, "end")
+        text = _get_segment_value(segment, "text", "")
+        if not _valid_timestamp(start) or not _valid_timestamp(end) or float(end) <= float(start):
+            continue
+        if not isinstance(text, str) or not text.strip():
+            continue
+        text = text.strip()
+        if current_text:
+            flush()
+        if current_start is None:
+            current_start = float(start)
+        current_end = float(end)
+        current_text.append(text)
+        current_indexes.append(index)
+    flush()
+    return chunks
+
+
+def cosine_similarity(first: Any, second: Any) -> float:
+    """Return cosine similarity safely for empty, zero, or mismatched vectors."""
+    left, right = np.asarray(first, dtype=float).ravel(), np.asarray(second, dtype=float).ravel()
+    if left.size == 0 or right.size == 0 or left.size != right.size:
+        return 0.0
+    left_norm, right_norm = np.linalg.norm(left), np.linalg.norm(right)
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return float(np.clip(np.dot(left, right) / (left_norm * right_norm), -1.0, 1.0))
+
+
+def calculate_similarities(embeddings: np.ndarray) -> list[float]:
+    return [cosine_similarity(embeddings[index], embeddings[index + 1]) for index in range(max(0, len(embeddings) - 1))]
+
+
+def _topic_label(text: str, keywords: list[str]) -> str | None:
+    words = [word for word in tokenize(text) if word not in GENERIC_TOPIC_WORDS]
+    if not words:
+        return None
+    local_counts = Counter(words)
+    local_keywords = [word for word, _count in local_counts.most_common() if word in keywords]
+    return (local_keywords[0] if local_keywords else local_counts.most_common(1)[0][0]).title()
+
+
+def detect_topics_semantic(
+    chunks: list[TranscriptChunk],
+    embeddings: np.ndarray,
+    similarities: list[float],
+    boundary_threshold: float = 0.45,
+    min_region_chunks: int = 2,
+) -> list[TopicRegion]:
+    """Use semantic drops while preventing isolated short topic regions."""
+    if not chunks:
+        return []
+    min_region_chunks = max(1, min_region_chunks)
+    keywords = extract_keywords([{"text": chunk.text} for chunk in chunks])
+    regions: list[TopicRegion] = []
+    current = [chunks[0]]
+    for index, chunk in enumerate(chunks[1:]):
+        if (
+            len(current) >= min_region_chunks
+            and index < len(similarities)
+            and similarities[index] < boundary_threshold
+        ):
+            regions.append(TopicRegion(_topic_label(" ".join(item.text for item in current), keywords), current[0].start_time, current[-1].end_time, current))
+            current = [chunk]
+        else:
+            current.append(chunk)
+    regions.append(TopicRegion(_topic_label(" ".join(item.text for item in current), keywords), current[0].start_time, current[-1].end_time, current))
+    while len(regions) > 1:
+        small_index = next((index for index, region in enumerate(regions) if len(region.chunks) < min_region_chunks), None)
+        if small_index is None:
+            break
+        if small_index == 0:
+            merge_index = 1
+        elif small_index == len(regions) - 1:
+            merge_index = small_index - 1
+        else:
+            merge_index = small_index - 1 if len(regions[small_index - 1].chunks) >= len(regions[small_index + 1].chunks) else small_index + 1
+        left_index, right_index = sorted((small_index, merge_index))
+        merged_chunks = regions[left_index].chunks + regions[right_index].chunks
+        merged_text = " ".join(item.text for item in merged_chunks)
+        merged = TopicRegion(_topic_label(merged_text, keywords), merged_chunks[0].start_time, merged_chunks[-1].end_time, merged_chunks)
+        regions[left_index:right_index + 1] = [merged]
+    return regions
+
+
+def interval_iou(first: KeyMoment, second: KeyMoment) -> float:
+    intersection = max(0.0, min(first.end_time, second.end_time) - max(first.start_time, second.start_time))
+    union = max(first.end_time, second.end_time) - min(first.start_time, second.start_time)
+    return intersection / union if union > 0 else 0.0
+
+
+def remove_overlaps(candidates: list[KeyMoment], overlap_threshold: float = 0.25) -> list[KeyMoment]:
+    """Keep the stronger candidate when overlap covers the shorter clip.
+
+    The default 0.25 ratio means at least a quarter of the shorter candidate must
+    be redundant; this is more useful for highlights of different lengths
+    than global IoU alone.
+    """
+    selected: list[KeyMoment] = []
+    for candidate in sorted(candidates, key=lambda item: item.importance_score, reverse=True):
+        def overlap_ratio(existing: KeyMoment) -> float:
+            intersection = max(0.0, min(candidate.end_time, existing.end_time) - max(candidate.start_time, existing.start_time))
+            shorter = min(candidate.end_time - candidate.start_time, existing.end_time - existing.start_time)
+            return intersection / shorter if shorter > 0 else 0.0
+
+        if all(overlap_ratio(existing) < overlap_threshold for existing in selected):
+            selected.append(candidate)
+    return sorted(selected, key=lambda item: item.start_time)
 
 
 def _get_segment_value(
@@ -357,75 +550,53 @@ def detect_key_moments(
     segments: list[TranscriptSegment | dict[str, Any]],
     threshold: float = 0.30,
     max_moments: int = 10,
-) -> list[KeyMoment]:
+):
+    """Detect important chunks using local semantic embeddings when available.
+
+    Importance combines keyword density (40%), content density (30%), and
+    semantic topic relevance (30%). The keyword fallback keeps existing
+    uploads usable when model weights are unavailable, while installed
+    Sentence Transformers remains the primary path.
     """
-    Detect important transcript segments.
-
-    Current implementation uses keyword frequency and keyword density.
-    It does not require an external ML model.
-
-    Later, this function can be replaced or enhanced with an NLP/LLM
-    model without changing the API layer.
-    """
-
-    if not segments:
+    chunks = segment_transcript(segments)
+    if not chunks:
         return []
-
-    keywords = extract_keywords(segments)
+    keywords = extract_keywords([{"text": chunk.text} for chunk in chunks])
+    try:
+        embeddings = generate_embeddings([chunk.text for chunk in chunks])
+        similarities = calculate_similarities(embeddings)
+        regions = detect_topics_semantic(
+            chunks,
+            embeddings,
+            similarities,
+            min_region_chunks=1,
+        )
+    except Exception:
+        embeddings = np.empty((0, 0))
+        regions = []
 
     candidates: list[KeyMoment] = []
-
-    for segment in segments:
-        start = _get_segment_value(segment, "start")
-        end = _get_segment_value(segment, "end")
-        text = _get_segment_value(segment, "text", "")
-
-        if start is None or end is None:
+    for index, chunk in enumerate(chunks):
+        keyword_score = _calculate_importance(chunk.text, keywords)
+        words = tokenize(chunk.text)
+        content_score = min(1.0, len(words) / 35.0)
+        semantic_score = 0.0
+        topic = _build_topic(chunk.text, keywords)
+        if regions:
+            region = next((item for item in regions if chunk in item.chunks), None)
+            if region:
+                topic = region.label
+                semantic_score = 1.0 / len(region.chunks)
+        score = round(min(1.0, 0.4 * keyword_score + 0.3 * content_score + 0.3 * semantic_score), 2)
+        if score < threshold and not regions:
+            score = keyword_score
+        if score < threshold:
             continue
+        candidates.append(KeyMoment(chunk.start_time, chunk.end_time, _build_title(chunk.text, keywords), topic, score, chunk.text))
 
-        if not isinstance(text, str) or not text.strip():
-            continue
-
-        importance_score = _calculate_importance(
-            text,
-            keywords,
-        )
-
-        title = _build_title(
-            text,
-            keywords,
-        )
-
-        topic = _build_topic(
-            text,
-            keywords,
-        )
-
-        candidates.append(
-            KeyMoment(
-                start_time=float(start),
-                end_time=float(end),
-                title=title,
-                topic=topic,
-                importance_score=importance_score,
-                text=text.strip(),
-            )
-        )
-
-    # Sort most important moments first.
-    candidates.sort(
-        key=lambda moment: moment.importance_score,
-        reverse=True,
-    )
-
-    selected = candidates[:max_moments]
-
-    # Return them in video order for the frontend.
-    selected.sort(
-        key=lambda moment: moment.start_time
-    )
-
-    return selected
+    return remove_overlaps(
+        sorted(candidates, key=lambda item: item.importance_score, reverse=True)
+    )[:max_moments]
 
 
 def save_key_moments(

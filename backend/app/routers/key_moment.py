@@ -6,15 +6,28 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
+from app.models.transcript import TranscriptStatus
 from app.models.video import Video
 from app.models.key_moment import KeyMoment
 from app.schemas.key_moment import KeyMomentsResponse
+from app.services.key_moment_service import detect_key_moments, save_key_moments
 
 
 router = APIRouter(
     prefix="/videos",
     tags=["key-moments"],
 )
+
+
+def get_owned_video(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> Video:
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return video
 
 
 @router.get(
@@ -79,6 +92,28 @@ def get_key_moments(
         "video_id": video.id,
         "status": video.status,
         "key_moments": key_moments,
+    }
+
+
+@router.post(
+    "/{video_id}/key-moments/generate",
+    response_model=KeyMomentsResponse,
+)
+def generate_key_moments(
+    video: Video = Depends(get_owned_video),
+    db: Session = Depends(get_db),
+):
+    """Regenerate key moments from the already stored transcript."""
+    transcript = video.transcript
+    if transcript is None or transcript.status != TranscriptStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail="Transcript must be completed before key-moment detection")
+    moments = detect_key_moments(transcript.segments or [])
+    saved = save_key_moments(db, video.id, moments)
+    db.commit()
+    return {
+        "video_id": video.id,
+        "status": video.status,
+        "key_moments": saved,
     }
 
 

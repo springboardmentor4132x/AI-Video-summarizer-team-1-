@@ -11,6 +11,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db
@@ -334,3 +335,19 @@ def get_video_status(
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video
+
+
+@router.get("/media/videos/{user_id}/{video_id}")
+def get_video_media(
+    user_id: int,
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Serve only the authenticated user's uploaded source video."""
+    if user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Video not found")
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None or not Path(video.file_path).is_file():
+        raise HTTPException(status_code=404, detail="Video file not found")
+    return FileResponse(video.file_path, media_type="video/mp4", filename=video.filename)
