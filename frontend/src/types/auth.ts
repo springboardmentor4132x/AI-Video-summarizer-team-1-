@@ -1,10 +1,9 @@
 export type Role = "Content Creator" | "Learner" | "Educator" | "Administrator";
 
 export interface CurrentUser {
-  id: string;
+  id: number;
   full_name: string;
   email: string;
-  role_id: string;
   role: Role;
   created_at: string;
 }
