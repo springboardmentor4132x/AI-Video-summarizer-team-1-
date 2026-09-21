@@ -43,7 +43,7 @@ export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelP
   const [currentTime, setCurrentTime] = useState(0);
   const canEdit = user?.role === "Content Creator" || user?.role === "Educator" || user?.role === "Administrator";
   const canGenerate = canEdit;
-  const videoUrl = getVideoMediaUrl(videoId, ownerId, filename);
+  const videoUrl = getVideoMediaUrl(token ?? "", videoId, ownerId, filename);
 
   console.log("[ClipMind video URL]", {
   videoId,

@@ -95,9 +95,8 @@ export class ApiError extends Error {
 
 const API_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-export function getVideoMediaUrl(videoId: string, userId: string, filename: string) {
-  const extension = filename.includes(".") ? filename.slice(filename.lastIndexOf(".")) : "";
-  return `${API_URL}/media/videos/${userId}/${videoId}${extension}`;
+export function getVideoMediaUrl(token: string, videoId: string, userId: string, filename: string) {
+  return `${API_URL}/videos/${videoId}/media?token=${token}`;
 }
 
 async function responseError(response: Response, fallback: string) {

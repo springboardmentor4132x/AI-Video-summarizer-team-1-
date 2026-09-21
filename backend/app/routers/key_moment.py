@@ -16,6 +16,48 @@ router = APIRouter(
     tags=["key-moments"],
 )
 
+from fastapi import BackgroundTasks
+from app.db.session import SessionLocal
+from app.models.transcript import Transcript
+from app.routers.video import generate_key_moments_task
+
+def run_generate_key_moments(video_id: int, input_path: str, segments: list):
+    db = SessionLocal()
+    try:
+        generate_key_moments_task(video_id, input_path, segments, db)
+    finally:
+        db.close()
+
+@router.post(
+    "/{video_id}/key-moments/generate",
+    response_model=KeyMomentsResponse,
+)
+def generate_key_moments(
+    background_tasks: BackgroundTasks,
+    video: Video = Depends(get_owned_video),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate key moments for a video owned by the current user.
+    """
+    transcript = db.query(Transcript).filter(Transcript.video_id == video.id).first()
+    if not transcript or not transcript.segments:
+        raise HTTPException(
+            status_code=400,
+            detail="Transcript segments not found. Cannot generate key moments.",
+        )
+    
+    background_tasks.add_task(
+        run_generate_key_moments,
+        video.id,
+        video.file_path,
+        transcript.segments,
+    )
+    
+    # Return existing key moments (could be empty, they will be replaced in background)
+    return get_key_moments(video, db)
+
+
 
 @router.get(
     "/{video_id}/key-moments",

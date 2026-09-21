@@ -11,10 +11,12 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db
 from app.dependencies.auth import get_current_user
+from app.models.key_moment import KeyMoment
 from app.models.summary import Summary, SummaryStatus
 from app.models.transcript import Transcript, TranscriptStatus
 from app.models.video import Video
@@ -53,6 +55,53 @@ def remove_file(path: Path | str) -> None:
         Path(path).unlink(missing_ok=True)
     except OSError:
         pass
+
+def generate_key_moments_task(video_id: int, input_path: str, segments: list, db: Session):
+    db.query(KeyMoment).filter(KeyMoment.video_id == video_id).delete()
+    db.commit()
+    
+    moments = detect_key_moments(
+        segments,
+        threshold=0.30,
+        max_moments=10,
+    )
+    saved_moments = save_key_moments(
+        db=db,
+        video_id=video_id,
+        moments=moments,
+    )
+
+    highlight_dir = UPLOAD_DIR / "highlights" / str(video_id)
+    highlight_results = extract_highlights_for_key_moments(
+        video_path=input_path,
+        moments=saved_moments,
+        output_dir=highlight_dir,
+    )
+
+    for index, moment in enumerate(saved_moments):
+        result = (
+            highlight_results[index]
+            if index < len(highlight_results)
+            else None
+        )
+        if result is None:
+            logger.warning(
+                "No highlight result for key moment %s of video %s",
+                moment.id,
+                video_id,
+            )
+            continue
+        if result.status == "completed":
+            moment.highlight_path = result.highlight_path
+        else:
+            logger.warning(
+                "Highlight generation failed for key moment %s of video %s: %s",
+                moment.id,
+                video_id,
+                result.error_code,
+            )
+    
+    db.commit()
 
 
 def process_video_background(
@@ -114,7 +163,7 @@ def process_video_background(
                 extraction.error_code,
             )
             transcript.status = TranscriptStatus.FAILED
-            video.status = "completed"
+            video.status = "failed"
             db.commit()
             return
 
@@ -126,7 +175,7 @@ def process_video_background(
                 transcription.error_code,
             )
             transcript.status = TranscriptStatus.FAILED
-            video.status = "completed"
+            video.status = "failed"
             db.commit()
             return
 
@@ -157,46 +206,7 @@ def process_video_background(
             db.commit()
             return
 
-        moments = detect_key_moments(
-            segments,
-            threshold=0.30,
-            max_moments=10,
-        )
-        saved_moments = save_key_moments(
-            db=db,
-            video_id=video.id,
-            moments=moments,
-        )
-
-        highlight_dir = UPLOAD_DIR / "highlights" / str(video.id)
-        highlight_results = extract_highlights_for_key_moments(
-            video_path=input_path,
-            moments=saved_moments,
-            output_dir=highlight_dir,
-        )
-
-        for index, moment in enumerate(saved_moments):
-            result = (
-                highlight_results[index]
-                if index < len(highlight_results)
-                else None
-            )
-            if result is None:
-                logger.warning(
-                    "No highlight result for key moment %s of video %s",
-                    moment.id,
-                    video_id,
-                )
-                continue
-            if result.status == "completed":
-                moment.highlight_path = result.highlight_path
-            else:
-                logger.warning(
-                    "Highlight generation failed for key moment %s of video %s: %s",
-                    moment.id,
-                    video_id,
-                    result.error_code,
-                )
+        generate_key_moments_task(video_id, str(input_path), segments, db)
 
         video.status = "completed"
         db.commit()
@@ -314,6 +324,23 @@ async def upload_video(
 
 
 @router.get(
+    "/",
+    response_model=list[VideoResponse],
+)
+def list_videos(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """List all videos uploaded by the authenticated user."""
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.uploaded_at.desc())
+        .all()
+    )
+
+
+@router.get(
     "/{video_id}/status",
     response_model=VideoStatusResponse,
 )
@@ -334,3 +361,25 @@ def get_video_status(
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video
+
+
+@router.get("/{video_id}/media")
+async def get_video_media(
+    video_id: int,
+    token: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Serve the video file for playback.
+    Requires token as a query parameter because HTML <video> cannot send headers.
+    """
+    user = await get_current_user(token, db)
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == user.id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    file_path = Path(video.file_path)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Media file not found")
+        
+    return FileResponse(path=file_path, media_type="video/mp4", filename=file_path.name)

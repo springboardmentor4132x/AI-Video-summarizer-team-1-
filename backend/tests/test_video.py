@@ -232,6 +232,14 @@ def test_background_processing_updates_video_status(monkeypatch, tmp_path, ffmpe
         return ffmpeg_result
 
     monkeypatch.setattr(video_router, "process_video", fake_process_video)
+    
+    def fake_extract_audio(*args, **kwargs):
+        return SimpleNamespace(status="completed", audio_path="fake.wav")
+    monkeypatch.setattr(video_router, "extract_audio", fake_extract_audio)
+    
+    def fake_transcribe_audio(*args, **kwargs):
+        return SimpleNamespace(status="completed", text="fake", segments=[], language="en")
+    monkeypatch.setattr(video_router, "transcribe_audio", fake_transcribe_audio)
 
     video_router.process_video_background(video_id, str(tmp_path / "input.mp4"), str(tmp_path / "output.mp4"))
 
@@ -333,7 +341,7 @@ def test_background_processing_handles_audio_extraction_failure(monkeypatch, tmp
     processed = db.get(Video, video_id)
     transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
     db.close()
-    assert processed.status == "completed"
+    assert processed.status == "failed"
     assert transcript is not None
     assert transcript.status.value == "FAILED"
     assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
@@ -372,7 +380,7 @@ def test_background_processing_handles_transcription_failure(monkeypatch, tmp_pa
     processed = db.get(Video, video_id)
     transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
     db.close()
-    assert processed.status == "completed"
+    assert processed.status == "failed"
     assert transcript is not None
     assert transcript.status.value == "FAILED"
     assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
@@ -490,6 +498,115 @@ def test_background_processing_creates_key_moments(
         assert moment.title
         assert 0 <= moment.importance_score <= 1
 
+def test_generate_key_moments_authenticated(monkeypatch, tmp_path):
+    from app.routers import key_moment as km_router
+    called = []
+    def fake_task(*args):
+        called.append(True)
+    monkeypatch.setattr(km_router, "generate_key_moments_task", fake_task)
+    
+    user = create_user("generate-km@example.com")
+    db = TestingSessionLocal()
+    video = Video(user_id=user.id, filename="video.mp4", file_path="fake", status="uploaded")
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    transcript = Transcript(video_id=video.id, text="test", segments=[{"text": "test"}], status="COMPLETED")
+    db.add(transcript)
+    db.commit()
+    video_id = video.id
+    db.close()
+    
+    from app.core.security import create_access_token
+    token = create_access_token(user.id)
+    response = client.post(f"/videos/{video_id}/key-moments/generate", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert called == [True]
+
+def test_generate_key_moments_unauthorized():
+    response = client.post("/videos/1/key-moments/generate")
+    assert response.status_code == 401
+
+def test_generate_key_moments_cross_user():
+    user1 = create_user("gen-km1@example.com")
+    user2 = create_user("gen-km2@example.com")
+    db = TestingSessionLocal()
+    video = Video(user_id=user1.id, filename="video.mp4", file_path="fake", status="uploaded")
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    video_id = video.id
+    db.close()
+    
+    from app.core.security import create_access_token
+    token2 = create_access_token(user2.id)
+    response = client.post(f"/videos/{video_id}/key-moments/generate", headers={"Authorization": f"Bearer {token2}"})
+    assert response.status_code == 404
+def test_list_videos():
+    user = create_user("list-videos@example.com")
+    db = TestingSessionLocal()
+    video = Video(user_id=user.id, filename="my_video.mp4", file_path="/fake/path.mp4", status="uploaded")
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    db.close()
+
+    from app.core.security import create_access_token
+    token = create_access_token(user.id)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.get("/videos/", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["filename"] == "my_video.mp4"
+
+def test_list_videos_unauthenticated():
+    response = client.get("/videos/")
+    assert response.status_code == 401
+
+def test_get_video_media_authenticated(tmp_path):
+    user = create_user("media@example.com")
+    db = TestingSessionLocal()
+    fake_video = tmp_path / "fake.mp4"
+    fake_video.write_text("dummy")
+
+    video = Video(user_id=user.id, filename="fake.mp4", file_path=str(fake_video), status="uploaded")
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    db.close()
+
+    from app.core.security import create_access_token
+    token = create_access_token(user.id)
+
+    response = client.get(f"/videos/{video.id}/media?token={token}")
+    assert response.status_code == 200
+    assert response.text == "dummy"
+
+def test_get_video_media_wrong_user(tmp_path):
+    user1 = create_user("media1@example.com")
+    user2 = create_user("media2@example.com")
+    db = TestingSessionLocal()
+    fake_video = tmp_path / "fake2.mp4"
+    fake_video.write_text("dummy")
+
+    video = Video(user_id=user1.id, filename="fake.mp4", file_path=str(fake_video), status="uploaded")
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    db.close()
+
+    from app.core.security import create_access_token
+    token2 = create_access_token(user2.id)
+
+    response = client.get(f"/videos/{video.id}/media?token={token2}")
+    assert response.status_code == 404
+
+def test_get_video_media_unauthenticated():
+    response = client.get("/videos/1/media")
+    # Because token is a required query param, it will return 422 Unprocessable Entity
+    assert response.status_code == 422
 
 # ---------------------------------------------------------------------------
 # Highlight path persistence tests
