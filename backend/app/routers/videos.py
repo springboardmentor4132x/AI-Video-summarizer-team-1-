@@ -227,14 +227,6 @@ def generate_transcript(video_id: int, db: Session = Depends(get_db), current_us
     db.commit()
     db.refresh(transcript)
     return _transcript_payload(transcript)
-            
-    # If the code reaches here, it means extraction or transcription failed
-    video.status = "failed"
-    transcript.status = TranscriptStatus.FAILED
-    transcript.error_message = "Transcription failed."
-    db.commit()
-    db.refresh(transcript)
-    return _transcript_payload(transcript)
 
 
 @router.get("/{video_id}/summary")
