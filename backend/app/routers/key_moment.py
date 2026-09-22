@@ -5,7 +5,8 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_user, require_role
+from app.schemas.user import UserRole
 from app.models.transcript import TranscriptStatus
 from app.models.video import Video
 from app.models.key_moment import KeyMoment
@@ -100,10 +101,14 @@ def get_key_moments(
     response_model=KeyMomentsResponse,
 )
 def generate_key_moments(
-    video: Video = Depends(get_owned_video),
+    video_id: int,
     db: Session = Depends(get_db),
+    current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR])),
 ):
     """Regenerate key moments from the already stored transcript."""
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
     transcript = video.transcript
     if transcript is None or transcript.status != TranscriptStatus.COMPLETED:
         raise HTTPException(status_code=409, detail="Transcript must be completed before key-moment detection")

@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./features/auth/AuthContext";
+import { KeyMomentsPage } from "./features/key-moments/KeyMomentsPage";
 import { Dashboard, DashboardRedirect, Login, ProcessingStatusPage, Profile, Register, RoleFeaturePage, UploadHistoryPage, VideoLibraryPage, VideoUploadPage } from "./pages";
 import "./styles/global.css";
 
@@ -24,6 +25,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/creator/transcripts" element={<VideoLibraryPage heading="Video transcripts" description="Generate, review, edit, and download transcripts for your videos." />} />
                 <Route path="/creator/history" element={<UploadHistoryPage />} />
                 <Route path="/creator/processing" element={<ProcessingStatusPage />} />
+                <Route path="/creator/key-moments/:videoId" element={<KeyMomentsPage />} />
               </Route>
               <Route element={<ProtectedRoute allowedRoles={["Learner"]} />}>
                 <Route path="/dashboard/learner" element={<Dashboard />} />
@@ -31,6 +33,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/learner/content" element={<RoleFeaturePage title="Learning Content" description="Return to the lessons and materials in your learning shelf." endpoint="/rbac/learner/content" />} />
                 <Route path="/learner/summaries" element={<RoleFeaturePage title="Summaries" description="AI-generated summaries will appear here when processing is enabled." />} />
                 <Route path="/learner/transcripts" element={<VideoLibraryPage heading="Video transcripts" description="Read and search transcripts for completed videos available to your learning path." />} />
+                <Route path="/learner/key-moments/:videoId" element={<KeyMomentsPage />} />
               </Route>
               <Route element={<ProtectedRoute allowedRoles={["Educator"]} />}>
                 <Route path="/dashboard/educator" element={<Dashboard />} />
@@ -38,6 +41,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/educator/content" element={<VideoLibraryPage heading="Educational content" description="Review the lecture videos and educational materials you manage." />} />
                 <Route path="/educator/transcripts" element={<VideoLibraryPage heading="Lecture transcripts" description="Generate, review, edit, and download transcripts for your lectures." />} />
                 <Route path="/educator/classroom" element={<RoleFeaturePage title="Classroom Content" description="Keep classroom-ready lessons together for your learners." endpoint="/rbac/educator/content" />} />
+                <Route path="/educator/key-moments/:videoId" element={<KeyMomentsPage />} />
               </Route>
               <Route element={<ProtectedRoute allowedRoles={["Administrator"]} />}>
                 <Route path="/dashboard/administrator" element={<Dashboard />} />

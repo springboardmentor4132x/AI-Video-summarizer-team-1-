@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ArrowUpRight, BookOpen, Clapperboard, FileClock, Gauge, Library, MonitorCog, ShieldCheck, Users, Video, WandSparkles } from "lucide-react";
 import { useAuth } from "./features/auth/AuthContext";
 import { TranscriptPanel } from "./features/transcripts/TranscriptPanel";
-import { checkPermission, getUploadHistory, getVideoStatuses, getVideos, register as registerRequest, uploadVideo, type UploadHistoryEvent, type VideoListItem, type VideoStatus } from "./services/api";
+import { checkPermission, getUploadHistory, getVideoStatuses, getVideos, register as registerRequest, uploadVideo, type VideoUploadResponse } from "./services/api";
 import type { Role } from "./types/auth";
 
 const dashboardConfig: Record<Role, { kicker: string; title: string; description: string; accent: string; actions: { label: string; detail: string; icon: typeof Video; route: string; endpoint?: string }[] }> = {
@@ -125,7 +125,7 @@ export function VideoUploadPage() {
     setError(null);
     try {
       const result = await uploadVideo(token, file);
-      setMessage(`${result.filename} uploaded successfully. Processing status: ${result.processing_status}.`);
+      setMessage(`${result.filename} uploaded successfully. Processing status: ${result.status}.`);
       setFile(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The video could not be uploaded.");
@@ -139,7 +139,7 @@ export function VideoUploadPage() {
 
 export function UploadHistoryPage({ administrator = false }: { administrator?: boolean }) {
   const { token } = useAuth();
-  const [events, setEvents] = useState<UploadHistoryEvent[]>([]);
+  const [events, setEvents] = useState<VideoUploadResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -153,12 +153,12 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
       .finally(() => setLoading(false));
   }, [administrator, token]);
 
-  return <section className="simple-page history-page"><span className="eyebrow">{administrator ? "Platform activity" : "Creator studio"}</span><h1>{administrator ? "Upload activity" : "Upload history"}</h1><p className="feature-description">{administrator ? "Monitor upload and processing events across the ClipMind platform." : "Review the upload and processing events for your videos."}</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading upload history...</div>}{error && <div className="notice" role="alert">{error}</div>}{!loading && !error && events.length === 0 && <div className="feature-placeholder"><span className="eyebrow">No events yet</span><h2>Your upload history is empty</h2><p>Accepted uploads and future processing events will appear here.</p></div>}{!loading && !error && events.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th>{administrator && <th>Owner</th>}<th>Status</th><th>Timestamp</th><th>Event notes</th></tr></thead><tbody>{events.map(event => <tr key={event.id}><td><strong>{event.filename}</strong><small>{event.video_id}</small></td>{administrator && <td>{event.owner_name}</td>}<td><span className={`event-status ${event.status.toLowerCase()}`}>{event.status}</span></td><td>{new Date(event.timestamp).toLocaleString()}</td><td>{event.notes ?? "-"}</td></tr>)}</tbody></table></div>}</section>;
+  return <section className="simple-page history-page"><span className="eyebrow">{administrator ? "Platform activity" : "Creator studio"}</span><h1>{administrator ? "Upload activity" : "Upload history"}</h1><p className="feature-description">{administrator ? "Monitor upload and processing events across the ClipMind platform." : "Review the upload and processing events for your videos."}</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading upload history...</div>}{error && <div className="notice" role="alert">{error}</div>}{!loading && !error && events.length === 0 && <div className="feature-placeholder"><span className="eyebrow">No events yet</span><h2>Your upload history is empty</h2><p>Accepted uploads and future processing events will appear here.</p></div>}{!loading && !error && events.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th><th>Status</th><th>Uploaded</th></tr></thead><tbody>{events.map(event => <tr key={event.id}><td><strong>{event.filename}</strong><small>{event.id}</small></td><td><span className={`event-status ${event.status.toLowerCase()}`}>{event.status}</span></td><td>{new Date(event.uploaded_at).toLocaleString()}</td></tr>)}</tbody></table></div>}</section>;
 }
 
 export function ProcessingStatusPage() {
   const { token } = useAuth();
-  const [videos, setVideos] = useState<VideoStatus[]>([]);
+  const [videos, setVideos] = useState<VideoUploadResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -170,14 +170,20 @@ export function ProcessingStatusPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  return <section className="simple-page status-page"><span className="eyebrow">Creator studio</span><h1>Processing status</h1><p className="feature-description">Track the current lifecycle state of your uploaded videos. AI processing is not started by this view.</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading current statuses...</div>}{error && <div className="notice" role="alert">{error}</div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">Nothing processing</span><h2>No uploaded videos yet</h2><p>Upload a video to begin tracking its lifecycle.</p></div>}{!loading && !error && videos.length > 0 && <div className="status-list">{videos.map(video => <article className="status-card" key={video.id}><div><strong>{video.filename}</strong><small>Updated {new Date(video.updated_at).toLocaleString()}</small></div><span className={`event-status ${video.processing_status.toLowerCase()}`}>{video.processing_status}</span><p>{video.latest_note ?? "No status notes yet."}</p></article>)}</div>}</section>;
+  return <section className="simple-page status-page"><span className="eyebrow">Creator studio</span><h1>Processing status</h1><p className="feature-description">Track the current lifecycle state of your uploaded videos. AI processing is not started by this view.</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading current statuses...</div>}{error && <div className="notice" role="alert">{error}</div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">Nothing processing</span><h2>No uploaded videos yet</h2><p>Upload a video to begin tracking its lifecycle.</p></div>}{!loading && !error && videos.length > 0 && <div className="status-list">{videos.map(video => <article className="status-card" key={video.id}><div><strong>{video.filename}</strong><small>Uploaded {new Date(video.uploaded_at).toLocaleString()}</small></div><span className={`event-status ${video.status.toLowerCase()}`}>{video.status}</span></article>)}</div>}</section>;
 }
 
 export function VideoLibraryPage({ heading, description }: { heading: string; description: string }) {
   const { token, user } = useAuth();
-  const [videos, setVideos] = useState<VideoListItem[]>([]);
+  const [videos, setVideos] = useState<VideoUploadResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Derive the role-specific route prefix for key-moments navigation.
+  // Administrators do not have a key-moments route, so the link is omitted.
+  const keyMomentsPrefix: string | null = user
+    ? { "Content Creator": "/creator", Learner: "/learner", Educator: "/educator", Administrator: null }[user.role] ?? null
+    : null;
 
   async function loadVideos() {
     if (!token) return;
@@ -190,7 +196,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
 
   useEffect(() => { void loadVideos(); }, [token]);
 
-   return <section className="simple-page library-page"><span className="eyebrow">Video library</span><h1>{heading}</h1><p className="feature-description">{description}</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading videos...</div>}{error && <div className="notice" role="alert">{error}<button className="text-button" onClick={() => void loadVideos()}>Try again</button></div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">No videos available</span><h2>Your library is empty</h2><p>Uploaded videos will appear here with their processing status.</p></div>}{!loading && !error && videos.length > 0 && <div className="video-grid">{videos.map(video => <article className="video-card" key={video.id}><div className="video-card-top"><Video size={20} /><span className={`event-status ${video.processing_status.toLowerCase()}`}>{video.processing_status}</span></div><h2>{video.filename}</h2><p>{video.owner_name} · {(video.file_size_bytes / (1024 * 1024)).toFixed(2)} MB</p><small>{video.duration_seconds ? `${video.duration_seconds}s` : "Duration pending"} · Uploaded {new Date(video.uploaded_at).toLocaleDateString()}</small>{user && <TranscriptPanel videoId={video.id} ownerId={video.owner_id} filename={video.filename} />}</article>)}</div>}</section>;
+  return <section className="simple-page library-page"><span className="eyebrow">Video library</span><h1>{heading}</h1><p className="feature-description">{description}</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading videos...</div>}{error && <div className="notice" role="alert">{error}<button className="text-button" onClick={() => void loadVideos()}>Try again</button></div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">No videos available</span><h2>Your library is empty</h2><p>Uploaded videos will appear here with their processing status.</p></div>}{!loading && !error && videos.length > 0 && <div className="video-grid">{videos.map(video => <article className="video-card" key={video.id}><div className="video-card-top"><Video size={20} /><span className={`event-status ${video.status.toLowerCase()}`}>{video.status}</span></div><h2>{video.filename}</h2><small>Uploaded {new Date(video.uploaded_at).toLocaleDateString()}</small>{user && <>{keyMomentsPrefix && <Link className="auth-link" to={`${keyMomentsPrefix}/key-moments/${video.id}`} state={{ video }}>Open key moments</Link>}<TranscriptPanel videoId={video.id} filename={video.filename} /></>}</article>)}</div>}</section>;
 }
 
 export function DashboardRedirect() {
@@ -228,6 +234,6 @@ export function Register() {
   return <main className="login-page"><div className="login-art"><div className="brand"><span className="brand-mark">C</span><span>ClipMind <em>AI</em></span></div><div className="art-copy"><span className="eyebrow">Start your workspace</span><h1>Give every frame somewhere useful to go.</h1><p>Create a role-aware ClipMind account for making, learning, teaching, or operating.</p></div></div><div className="login-panel"><div className="form-wrap"><span className="eyebrow">New account</span><h2>Join ClipMind</h2><p className="form-intro">Your role determines the workspace and permissions you receive.</p><form onSubmit={submit}><label>Full name<input value={form.full_name} onChange={event => update("full_name", event.target.value)} required /></label><label>Email<input type="email" value={form.email} onChange={event => update("email", event.target.value)} required /></label><label>Role<select value={form.role} onChange={event => update("role", event.target.value)}><option>Content Creator</option><option>Learner</option><option>Educator</option><option>Administrator</option></select></label><label>Password<input type="password" value={form.password} onChange={event => update("password", event.target.value)} minLength={8} required /></label><label>Confirm password<input type="password" value={form.confirm_password} onChange={event => update("confirm_password", event.target.value)} minLength={8} required /></label>{error && <p className="form-error" role="alert">{error}</p>}{success && <p className="upload-success" role="status">{success}</p>}<button className="primary-button" disabled={busy}>{busy ? "Creating account..." : "Create account"}</button></form><Link className="auth-link" to="/login">Back to sign in</Link></div></div></main>;
 }
 
-export function Profile() { const { user } = useAuth(); if (!user) return <Navigate to="/login" replace />; return <section className="simple-page"><span className="eyebrow">Account</span><h1>Your profile</h1><div className="profile-card"><div className="avatar">{user.full_name.slice(0, 1)}</div><div><h2>{user.full_name}</h2><p>{user.email}</p><span className="role-badge">{user.role}</span></div></div></section>; }
+export function Profile() { const { user } = useAuth(); if (!user) return <Navigate to="/login" replace />; return <section className="simple-page"><span className="eyebrow">Account</span><h1>Your profile</h1><div className="profile-card"><div className="avatar">{user.name.slice(0, 1)}</div><div><h2>{user.name}</h2><p>{user.email}</p><span className="role-badge">{user.role}</span></div></div></section>; }
 
 export { Dashboard };

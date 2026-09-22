@@ -39,7 +39,7 @@ export function AppShell() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">C</span><span>ClipMind <em>AI</em></span></div>
-        <div className="identity"><span className="eyebrow">SIGNED IN AS</span><strong>{user.full_name}</strong><span>{user.role}</span></div>
+        <div className="identity"><span className="eyebrow">SIGNED IN AS</span><strong>{user.name}</strong><span>{user.role}</span></div>
         <nav className="nav-list">
           <NavLink to={`/dashboard/${user.role.toLowerCase().replace(" ", "-")}`}><LayoutDashboard size={17} /> Dashboard</NavLink>
           {roleNavigation[user.role].map(({ label, path, icon: Icon }) => <NavLink key={path} to={path}><Icon size={17} /> {label}</NavLink>)}

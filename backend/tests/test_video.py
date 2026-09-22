@@ -50,9 +50,9 @@ def configure_test_app(monkeypatch, tmp_path):
     Base.metadata.drop_all(bind=engine)
 
 
-def create_user(email: str) -> User:
+def create_user(email: str, role: str = "Content Creator") -> User:
     db = TestingSessionLocal()
-    user = User(name="Video User", email=email, password="hash", role="learner")
+    user = User(name="Video User", email=email, password="hash", role=role)
     db.add(user)
     db.commit()
     db.refresh(user)

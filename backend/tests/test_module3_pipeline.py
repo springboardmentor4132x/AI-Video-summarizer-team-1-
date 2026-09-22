@@ -7,6 +7,7 @@ from app.services.key_moment_service import (
     detect_topics_semantic,
     remove_overlaps,
     segment_transcript,
+    _expand_to_sentence_boundaries,
 )
 
 
@@ -62,7 +63,7 @@ def test_topic_label_ignores_generic_narration_and_uses_local_content():
         {"start": 10, "end": 20, "text": "Number one is machine learning models."},
     ])
     regions = detect_topics_semantic(chunks, np.ones((2, 2)), [0.9], min_region_chunks=1)
-    assert regions[0].label == "Machine"
+    assert regions[0].label == "Machine Learning"
     assert regions[0].start_time == 0
     assert regions[0].end_time == 20
 
@@ -75,3 +76,13 @@ def test_remove_overlaps_keeps_stronger_candidate_and_non_overlapping_candidates
     ]
     selected = remove_overlaps(candidates)
     assert [item.title for item in selected] == ["B", "C"]
+
+
+def test_sentence_boundary_expansion_repairs_lowercase_whisper_continuation():
+    chunks = segment_transcript([
+        {"start": 10, "end": 15, "text": "The skill is loaded on demand."},
+        {"start": 15, "end": 20, "text": "disclosure. It avoids unnecessary context."},
+    ])
+    start, end, text = _expand_to_sentence_boundaries(chunks, 1)
+    assert (start, end) == (0, 1)
+    assert text.startswith("The skill is loaded")

@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_user, require_role
+from app.schemas.user import UserRole
 from app.models.summary import Summary, SummaryStatus
 from app.models.transcript import TranscriptStatus
 from app.models.video import Video
@@ -73,11 +74,10 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
 
 @router.post("/summaries/{video_id}/generate", response_model=SummaryResponse, status_code=status.HTTP_200_OK)
 @router.post("/videos/{video_id}/summary", response_model=SummaryResponse, status_code=status.HTTP_200_OK)
-@router.post("/videos/{video_id}/summary/regenerate", response_model=SummaryResponse)
-def generate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def generate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR]))):
     return _generate_summary(video_id, db, current_user)
 
 
 @router.post("/videos/{video_id}/summary/regenerate", response_model=SummaryResponse)
-def regenerate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def regenerate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR]))):
     return _generate_summary(video_id, db, current_user, regenerate=True)

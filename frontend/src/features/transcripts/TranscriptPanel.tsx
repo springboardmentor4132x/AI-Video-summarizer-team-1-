@@ -17,8 +17,7 @@ import {
 } from "../../services/api";
 
 interface TranscriptPanelProps {
-  videoId: string;
-  ownerId: string;
+  videoId: string | number;
   filename: string;
 }
 
@@ -28,7 +27,7 @@ function formatTime(seconds: number) {
   return `${minutes.toString().padStart(2, "0")}:${remainder}`;
 }
 
-export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelProps) {
+export function TranscriptPanel({ videoId, filename }: TranscriptPanelProps) {
   const { token, user } = useAuth();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
@@ -43,11 +42,11 @@ export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelP
   const [currentTime, setCurrentTime] = useState(0);
   const canEdit = user?.role === "Content Creator" || user?.role === "Educator" || user?.role === "Administrator";
   const canGenerate = canEdit;
-  const videoUrl = getVideoMediaUrl(videoId, ownerId, filename);
+  const videoUrl = user ? getVideoMediaUrl(videoId, user.id, filename) : "";
 
   console.log("[ClipMind video URL]", {
   videoId,
-  ownerId,
+  userId: user?.id,
   filename,
   videoUrl,
 });
@@ -55,7 +54,7 @@ export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelP
   useEffect(() => {
     if (!token) return;
     getTranscript(token, videoId)
-      .then(result => { setTranscript(result); setDraft(result.text); })
+      .then(result => { setTranscript(result); setDraft(result.text ?? ""); })
       .catch(reason => {
         if (!(reason instanceof Error) || !reason.message.toLowerCase().includes("does not exist")) {
           setError(reason instanceof Error ? reason.message : "Transcript could not be loaded.");
@@ -71,7 +70,7 @@ export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelP
       });
 
     getKeyMoments(token, videoId)
-      .then(setKeyMoments)
+      .then(result => setKeyMoments(result.key_moments))
       .catch(reason => {
         if (!(reason instanceof Error) || !reason.message.toLowerCase().includes("does not exist")) {
           setError(reason instanceof Error ? reason.message : "Key moments could not be loaded.");
@@ -84,7 +83,7 @@ export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelP
     setBusy(true); setError(null); setMessage("Processing transcript...");
     try {
       const result = await generateTranscript(token, videoId);
-      setTranscript(result); setDraft(result.text); setMessage("Transcript generated.");
+      setTranscript(result); setDraft(result.text ?? ""); setMessage("Transcript generated.");
     } catch (reason) {
       setMessage(null); setError(reason instanceof Error ? reason.message : "Transcript generation failed.");
     } finally { setBusy(false); }
@@ -95,7 +94,7 @@ export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelP
     setBusy(true); setError(null);
     try {
       const result = await updateTranscript(token, videoId, draft);
-      setTranscript(result); setDraft(result.text); setEditing(false); setMessage("Transcript saved successfully.");
+      setTranscript(result); setDraft(result.text ?? ""); setEditing(false); setMessage("Transcript saved successfully.");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Transcript could not be saved."); }
     finally { setBusy(false); }
   }
@@ -125,7 +124,7 @@ export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelP
     setBusy(true); setError(null); setMessage("Detecting key moments...");
     try {
       const result = await generateKeyMoments(token, videoId);
-      setKeyMoments(result); setMessage("Key moments detected.");
+      setKeyMoments(result.key_moments); setMessage("Key moments detected.");
     } catch (reason) {
       setMessage(null); setError(reason instanceof Error ? reason.message : "Key moments could not be detected.");
     } finally { setBusy(false); }
@@ -185,7 +184,11 @@ export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelP
   }
 
   const normalizedSearch = search.trim().toLowerCase();
-  const segments = transcript?.segments.filter(segment => !normalizedSearch || segment.text.toLowerCase().includes(normalizedSearch)) ?? [];
+  const transcriptSegments = transcript?.segments ?? [];
+  const segments = transcriptSegments.filter(segment => {
+    const text = segment.text ?? "";
+    return !normalizedSearch || text.toLowerCase().includes(normalizedSearch);
+  });
 
   return <div className="transcript-panel">
     <video
@@ -223,8 +226,9 @@ export function TranscriptPanel({ videoId, ownerId, filename }: TranscriptPanelP
     </div>
     {message && <p className="upload-success">{message}</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
-    {summary && <div className="transcript-content"><div className="transcript-heading"><Wand2 size={16} /><strong>Summary</strong></div><div className="transcript-text"><p>{summary.content}</p></div></div>}
-    {keyMoments.length > 0 && <div className="transcript-content key-moments"><div className="transcript-heading"><Sparkles size={16} /><strong>Key Moments</strong></div>{keyMoments.map(moment => { const active = currentTime >= moment.start_time && currentTime < moment.end_time; return <article className={`key-moment${active ? " active" : ""}`} key={moment.id} role="button" tabIndex={0} onClick={() => void seekToMoment(moment, false)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void seekToMoment(moment, false); } }}><div className="key-moment-heading"><strong>{moment.title}</strong><span>{formatTime(moment.start_time)} - {formatTime(moment.end_time)}</span></div><p>{moment.description}</p><small>Importance {Math.round(moment.importance_score * 100)}%</small><button className="text-button key-moment-play" type="button" onClick={event => { event.stopPropagation(); void seekToMoment(moment, true); }}>▶ Play Moment</button></article>; })}</div>}
-    {transcript?.status === "COMPLETED" && <div className="transcript-content"><div className="transcript-heading"><FileText size={16} /><strong>Transcript</strong></div>{editing ? <><textarea value={draft} onChange={event => setDraft(event.target.value)} rows={8} /><button className="primary-button" onClick={() => void save()} disabled={busy}>Save transcript</button></> : <>{transcript.segments.length > 0 && <label className="transcript-search"><Search size={14} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search transcript" /></label>}<div className="transcript-text">{segments.length > 0 ? segments.map((segment, index) => <p key={`${segment.start_time}-${index}`}><time>{formatTime(segment.start_time)}</time><span>{segment.text}</span></p>) : <p>{transcript.text}</p>}</div></>}</div>}
+    {transcript?.status === "FAILED" && <div className="notice" role="status"><strong>Transcript unavailable</strong><p>Transcript processing failed.</p></div>}
+    {summary && <div className="transcript-content"><div className="transcript-heading"><Wand2 size={16} /><strong>Summary</strong></div><div className="transcript-text"><p>{summary.short_summary}</p><p>{summary.detailed_summary}</p></div></div>}
+    {keyMoments.length > 0 && <div className="transcript-content key-moments"><div className="transcript-heading"><Sparkles size={16} /><strong>Key Moments</strong></div>{keyMoments.map(moment => { const active = currentTime >= moment.start_time && currentTime < moment.end_time; return <article className={`key-moment${active ? " active" : ""}`} key={moment.id} role="button" tabIndex={0} onClick={() => void seekToMoment(moment, false)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void seekToMoment(moment, false); } }}><div className="key-moment-heading"><strong>{moment.title}</strong><span>{formatTime(moment.start_time)} - {formatTime(moment.end_time)}</span></div><p>{moment.text}</p><small>{moment.topic ?? "General"} · Importance {Math.round(moment.importance_score * 100)}%</small><button className="text-button key-moment-play" type="button" onClick={event => { event.stopPropagation(); void seekToMoment(moment, true); }}>▶ Play Moment</button></article>; })}</div>}
+    {transcript?.status === "COMPLETED" && <div className="transcript-content"><div className="transcript-heading"><FileText size={16} /><strong>Transcript</strong></div>{editing ? <><textarea value={draft} onChange={event => setDraft(event.target.value)} rows={8} /><button className="primary-button" onClick={() => void save()} disabled={busy}>Save transcript</button></> : <>{transcriptSegments.length > 0 && <label className="transcript-search"><Search size={14} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search transcript" /></label>}<div className="transcript-text">{segments.length > 0 ? segments.map((segment, index) => <p key={`${segment.start}-${index}`}><time>{formatTime(segment.start)}</time><span>{segment.text ?? ""}</span></p>) : <p>{transcript.text ?? "Transcript text unavailable."}</p>}</div></>}</div>}
   </div>;
 }

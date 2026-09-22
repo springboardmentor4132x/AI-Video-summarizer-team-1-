@@ -1,81 +1,54 @@
 import type { CurrentUser, LoginResponse } from "../types/auth";
 
 export interface VideoUploadResponse {
-  id: string;
+  id: number;
   filename: string;
-  mime_type: string;
-  file_size_bytes: number;
-  processing_status: string;
-  uploaded_at: string;
-}
-
-export interface UploadHistoryEvent {
-  id: string;
-  video_id: string;
-  filename: string;
-  owner_id: string;
-  owner_name: string;
   status: string;
-  timestamp: string;
-  notes: string | null;
-}
-
-export interface VideoStatus {
-  id: string;
-  filename: string;
-  processing_status: string;
-  updated_at: string;
-  latest_note: string | null;
-}
-
-export interface VideoListItem {
-  id: string;
-  filename: string;
-  mime_type: string;
-  file_size_bytes: number;
-  duration_seconds: number | null;
-  processing_status: string;
   uploaded_at: string;
-  owner_id: string;
-  owner_name: string;
 }
 
 export interface TranscriptSegment {
-  start_time: number;
-  end_time: number;
-  text: string;
+  start: number;
+  end: number;
+  text: string | null;
 }
 
 export interface Transcript {
-  id: string;
-  video_id: string;
-  text: string;
-  segments: TranscriptSegment[];
+  id: number;
+  video_id: number;
+  text: string | null;
+  segments: TranscriptSegment[] | null;
   language: string | null;
   status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
-  error_message: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface Summary {
-  id: string;
-  video_id: string;
-  content: string;
+  id: number;
+  transcript_id: number;
+  short_summary: string | null;
+  detailed_summary: string | null;
+  status: "NOT_STARTED" | "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
   created_at: string;
   updated_at: string;
 }
 
 export interface KeyMoment {
-  id: string;
-  video_id: string;
+  id: number;
   start_time: number;
   end_time: number;
   title: string;
-  description: string;
+  topic: string | null;
   importance_score: number;
-  transcript_text: string;
-  created_at: string;
+  text: string;
+  highlight_path: string | null;
+}
+
+export interface KeyMomentsResponse {
+  video_id: number;
+  status: string;
+  key_moments: KeyMoment[];
 }
 
 export interface RegistrationPayload {
@@ -95,9 +68,9 @@ export class ApiError extends Error {
 
 const API_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-export function getVideoMediaUrl(videoId: string, userId: string, filename: string) {
-  const extension = filename.includes(".") ? filename.slice(filename.lastIndexOf(".")) : "";
-  return `${API_URL}/media/videos/${userId}/${videoId}${extension}`;
+export function getVideoMediaUrl(videoId: string | number, userId: string | number, filename: string) {
+  void filename;
+  return `${API_URL}/videos/media/videos/${userId}/${videoId}`;
 }
 
 async function responseError(response: Response, fallback: string) {
@@ -139,7 +112,12 @@ export function login(email: string, password: string) {
 export function register(payload: RegistrationPayload) {
   return request<{ id: string; email: string; role: string }>("/auth/register", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      name: payload.full_name,
+      email: payload.email,
+      role: payload.role,
+      password: payload.password,
+    }),
   });
 }
 
@@ -166,37 +144,37 @@ export function uploadVideo(token: string, file: File) {
 }
 
 export function getUploadHistory(token: string, administrator = false) {
-  return request<UploadHistoryEvent[]>(administrator ? "/admin/upload-history" : "/videos/history", {
+  return request<VideoUploadResponse[]>(administrator ? "/admin/upload-history" : "/videos/history", {
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
 export function getVideoStatuses(token: string) {
-  return request<VideoStatus[]>("/videos/status", {
+  return request<VideoUploadResponse[]>("/videos/status", {
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
 export function getVideos(token: string) {
-  return request<VideoListItem[]>("/videos/", {
+  return request<VideoUploadResponse[]>("/videos/", {
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
-export function getTranscript(token: string, videoId: string) {
+export function getTranscript(token: string, videoId: string | number) {
   return request<Transcript>(`/videos/${videoId}/transcript`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
-export function generateTranscript(token: string, videoId: string) {
+export function generateTranscript(token: string, videoId: string | number) {
   return request<Transcript>(`/videos/${videoId}/transcript`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
-export function updateTranscript(token: string, videoId: string, text: string) {
+export function updateTranscript(token: string, videoId: string | number, text: string) {
   return request<Transcript>(`/videos/${videoId}/transcript`, {
     method: "PATCH",
     headers: { Authorization: `Bearer ${token}` },
@@ -204,34 +182,34 @@ export function updateTranscript(token: string, videoId: string, text: string) {
   });
 }
 
-export function getSummary(token: string, videoId: string) {
+export function getSummary(token: string, videoId: string | number) {
   return request<Summary>(`/videos/${videoId}/summary`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
-export function generateSummary(token: string, videoId: string, regenerate = false) {
-  const query = regenerate ? "?regenerate=true" : "";
-  return request<Summary>(`/videos/${videoId}/summary${query}`, {
+export function generateSummary(token: string, videoId: string | number, regenerate = false) {
+  const path = regenerate ? `/videos/${videoId}/summary/regenerate` : `/videos/${videoId}/summary`;
+  return request<Summary>(path, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
-export function getKeyMoments(token: string, videoId: string) {
-  return request<KeyMoment[]>(`/videos/${videoId}/key-moments`, {
+export function getKeyMoments(token: string, videoId: string | number) {
+  return request<KeyMomentsResponse>(`/videos/${videoId}/key-moments`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
-export function generateKeyMoments(token: string, videoId: string) {
-  return request<KeyMoment[]>(`/videos/${videoId}/key-moments/generate`, {
+export function generateKeyMoments(token: string, videoId: string | number) {
+  return request<KeyMomentsResponse>(`/videos/${videoId}/key-moments/generate`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
-export async function downloadTranscript(token: string, videoId: string) {
+export async function downloadTranscript(token: string, videoId: string | number) {
   const response = await fetch(`${API_URL}/videos/${videoId}/transcript/download`, {
     headers: { Authorization: `Bearer ${token}` },
   });

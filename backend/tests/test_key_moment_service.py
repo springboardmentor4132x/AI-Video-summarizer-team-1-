@@ -60,7 +60,7 @@ def test_key_moment_detection():
     assert moment.end_time > moment.start_time
     assert 0.0 <= moment.importance_score <= 1.0
     assert moment.text
-def test_key_moment_topic_is_based_on_segment_content():
+def test_key_moment_topic_is_based_on_content_for_a_short_continuous_transcript():
     segments = [
         {
             "start": 0.0,
@@ -86,9 +86,10 @@ def test_key_moment_topic_is_based_on_segment_content():
         max_moments=10,
     )
 
-    assert len(moments) == 2
-    assert moments[0].topic == "Python"
-    assert moments[1].topic == "Machine"
+    # The two short segments are semantically continuous, so the minimum-region
+    # protection returns one representative moment instead of two fragments.
+    assert len(moments) == 1
+    assert moments[0].topic == "Machine Learning"
 
 def test_topic_segmentation_groups_segments():
     from app.services.key_moment_service import segment_topics
