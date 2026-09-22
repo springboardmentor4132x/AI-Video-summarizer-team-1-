@@ -1,19 +1,22 @@
-# Frontend (Node.js/Next.js)
+# Test video files
+test_input.mp4
+test_output.mp4
+
+# Frontend
 node_modules/
 dist/
 .vscode/
 
-# Backend (Python/FastAPI)
 venv/
+test_input.mp4
+test_output.mp4
 __pycache__/
 *.pyc
 .pytest_cache/
-
-# Environment Variables
 .env
-.env.*
-!.env.example
 
 # Test databases
 *.sqlite
 *.db
+# Local uploaded/processed videos
+backend/uploads/

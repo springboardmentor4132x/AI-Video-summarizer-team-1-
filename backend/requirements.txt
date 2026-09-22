@@ -5,6 +5,7 @@ pydantic-settings
 email-validator
 bcrypt
 python-jose[cryptography]
+python-multipart
 pytest
 httpx
 alembic==1.19.1
