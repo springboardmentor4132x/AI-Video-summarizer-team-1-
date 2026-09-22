@@ -1,5 +1,14 @@
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
+venv/
+
+# Environment Variables
 .env
+.env.*
+!.env.example
+
+# Test databases
+*.sqlite
 *.db
-__pycache__/
