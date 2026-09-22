@@ -113,6 +113,16 @@ def test_upload_requires_bearer_token():
     assert response.status_code == 401
 
 
+def test_upload_invalid_token_returns_401():
+    response = client.post(
+        "/videos/upload",
+        files={"file": ("video.mp4", b"data", "video/mp4")},
+        headers={"Authorization": "Bearer invalid_token"}
+    )
+
+    assert response.status_code == 401
+
+
 def test_authenticated_upload_streams_and_creates_owned_record(monkeypatch):
     user = create_user("owner@example.com")
     use_current_user(user)
@@ -149,6 +159,21 @@ def test_upload_size_limit_removes_partial_file(monkeypatch):
 
     assert response.status_code == 413
     assert not video_router.UPLOAD_DIR.exists() or not list(video_router.UPLOAD_DIR.glob("*"))
+
+
+def test_status_requires_bearer_token():
+    response = client.get("/videos/1/status")
+
+    assert response.status_code == 401
+
+
+def test_status_invalid_token_returns_401():
+    response = client.get(
+        "/videos/1/status",
+        headers={"Authorization": "Bearer invalid_token"}
+    )
+
+    assert response.status_code == 401
 
 
 def test_status_endpoint_returns_owned_video_status():
@@ -678,6 +703,17 @@ def test_key_moments_saved_when_one_highlight_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(video_router, "process_video", fake_process_video)
     monkeypatch.setattr(video_router, "extract_audio", fake_extract_audio)
     monkeypatch.setattr(video_router, "transcribe_audio", fake_transcribe_audio)
+    # This test covers mixed highlight persistence, not semantic selection.
+    # Patch the symbol used by the background router so two valid candidates
+    # deterministically reach the mixed highlight extractor.
+    monkeypatch.setattr(
+        video_router,
+        "detect_key_moments",
+        lambda *_args, **_kwargs: [
+            SimpleNamespace(start_time=0.0, end_time=2.0, title="First idea", topic="Topic A", importance_score=0.8, text="First complete idea."),
+            SimpleNamespace(start_time=3.0, end_time=5.0, title="Second idea", topic="Topic B", importance_score=0.7, text="Second complete idea."),
+        ],
+    )
 
     good_path = str(tmp_path / "highlights" / "clip_0.mp4")
 

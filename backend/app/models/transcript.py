@@ -29,7 +29,6 @@ class Transcript(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     text = Column(Text, nullable=True)
-
     # Detected/source language, for example: "en", "es", "fr"
     language = Column(String(10), nullable=True)
 
@@ -59,7 +58,6 @@ class Transcript(Base):
         nullable=False,
         unique=True,
     )
-
     # Relationships
     video = relationship(
         "Video",
