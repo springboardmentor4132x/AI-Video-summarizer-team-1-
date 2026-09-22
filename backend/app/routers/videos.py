@@ -207,7 +207,8 @@ def generate_transcript(video_id: int, db: Session = Depends(get_db), current_us
     extraction = extract_audio(str(input_path), str(audio_output_path))
     if extraction.status == "completed":
         transcription = transcribe_audio(extraction.audio_path)
-        if transcription.status == "completed":
+
+    if transcription.status == "completed":
             transcript.text = transcription.text or ""
             transcript.language = transcription.language or "en"
             transcript.segments = transcription.segments or []
@@ -216,9 +217,9 @@ def generate_transcript(video_id: int, db: Session = Depends(get_db), current_us
             db.commit()
             db.refresh(transcript)
             return _transcript_payload(transcript)
-
-            video.status = "failed"
-            db.commit()
+            
+    # If the code reaches here, it means extraction or transcription failed
+    video.status = "failed"
     transcript.status = TranscriptStatus.FAILED
     transcript.error_message = "Transcription failed."
     db.commit()
