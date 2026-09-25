@@ -292,7 +292,7 @@ def test_background_processing_creates_and_updates_one_transcript(monkeypatch, t
     summary = db.query(Summary).filter(Summary.transcript_id == transcripts[0].id).first()
     db.close()
     assert summary is not None
-    assert summary.status == SummaryStatus.NOT_STARTED
+    assert summary.status == SummaryStatus.PENDING
     assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
 
 def test_background_processing_handles_audio_extraction_failure(monkeypatch, tmp_path):

@@ -37,7 +37,7 @@ class Transcript(Base):
 
     status = Column(
         Enum(TranscriptStatus),
-        default=TranscriptStatus.NOT_STARTED,
+        default=TranscriptStatus.PENDING,
         nullable=False,
     )
 

@@ -169,13 +169,13 @@ def process_video_background(
         if summary is None:
             summary = Summary(
                 transcript_id=transcript.id,
-                status=SummaryStatus.NOT_STARTED,
+                status=SummaryStatus.PENDING,
             )
             db.add(summary)
         else:
             summary.short_summary = None
             summary.detailed_summary = None
-            summary.status = SummaryStatus.NOT_STARTED
+            summary.status = SummaryStatus.PENDING
         logger.info("Summary initialization completed for video_id: %s", video_id)
 
         segments = transcript.segments

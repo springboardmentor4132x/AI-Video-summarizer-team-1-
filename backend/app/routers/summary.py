@@ -46,7 +46,7 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
 
     summary = transcript.summary
     if summary is None:
-        summary = Summary(transcript_id=transcript.id, status=SummaryStatus.NOT_STARTED)
+        summary = Summary(transcript_id=transcript.id, status=SummaryStatus.PENDING)
         db.add(summary)
         db.flush()
 
