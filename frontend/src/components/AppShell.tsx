@@ -7,6 +7,7 @@ const roleNavigation: Record<Role, { label: string; path: string; icon: typeof F
   "Content Creator": [
     { label: "Upload Video", path: "/creator/upload", icon: Upload },
     { label: "Transcripts", path: "/creator/transcripts", icon: FileText },
+    { label: "MCQ Quiz", path: "/creator/mcqs", icon: BookOpen },
     { label: "Upload History", path: "/creator/history", icon: History },
     { label: "Analytics", path: "/analytics", icon: BarChart3 },
   ],

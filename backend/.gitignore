@@ -12,3 +12,9 @@ venv/
 # Test databases
 *.sqlite
 *.db
+bg_tasks.log
+*.log
+bg_tasks.log
+*.log
+register_test.py
+scripts/
