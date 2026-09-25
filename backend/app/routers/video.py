@@ -116,6 +116,10 @@ def process_video_background(
             db.commit()
             return
         logger.info("FFmpeg processing completed for video_id: %s", video_id)
+        
+        # Update file_path to point to the processed video with proper audio encoding
+        video.file_path = output_path
+        db.commit()
 
         transcript.status = TranscriptStatus.PROCESSING
         db.commit()

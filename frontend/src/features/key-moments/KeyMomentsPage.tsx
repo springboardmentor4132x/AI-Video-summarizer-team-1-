@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { Sparkles } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
-import { generateKeyMoments, getKeyMoments, getVideoMediaUrl, type KeyMoment, type VideoUploadResponse } from "../../services/api";
+import { generateKeyMoments, getKeyMoments, getVideoMediaObjectUrl, type KeyMoment, type VideoUploadResponse } from "../../services/api";
 
 function formatTime(seconds: number) {
   const minutes = Math.floor(seconds / 60);
@@ -19,6 +19,7 @@ export function KeyMomentsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState("");
 
   useEffect(() => {
     if (!token || !videoId) return;
@@ -28,6 +29,29 @@ export function KeyMomentsPage() {
       .catch(reason => setError(reason instanceof Error ? reason.message : "Key moments could not be loaded."))
       .finally(() => setLoading(false));
   }, [token, videoId]);
+
+  useEffect(() => {
+    if (!token || !user || !video) {
+      setVideoUrl("");
+      return;
+    }
+    let active = true;
+    let objectUrl: string | null = null;
+    setVideoUrl("");
+    getVideoMediaObjectUrl(token, video.id, user.id, video.filename)
+      .then(url => {
+        objectUrl = url;
+        if (active) setVideoUrl(url);
+        else URL.revokeObjectURL(url);
+      })
+      .catch(() => {
+        if (active) setError("This video could not be loaded. Check that the uploaded video is available.");
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [token, user?.id, video?.filename, video?.id]);
 
   async function regenerate() {
     if (!token || !videoId) return;
@@ -63,7 +87,7 @@ export function KeyMomentsPage() {
     <span className="eyebrow">Module 3 · {video.filename}</span>
     <h1>Topics and key moments</h1>
     <p className="feature-description">Semantic topic regions and ranked moments from the stored transcript.</p>
-    <video ref={player} className="video-player" controls preload="metadata" src={user ? getVideoMediaUrl(video.id, user.id, video.filename) : ""} />
+    <video ref={player} className="video-player" controls preload="metadata" {...(videoUrl ? { src: videoUrl } : {})} />
     <div className="transcript-actions"><button className="primary-button" type="button" onClick={() => void regenerate()} disabled={busy}>{busy ? "Detecting..." : "Regenerate key moments"}</button></div>
     {loading && <div className="feature-status" role="status"><span className="status-dot" />Loading key moments...</div>}
     {error && <div className="notice" role="alert">{error}</div>}

@@ -34,6 +34,11 @@ def _issue_token(email: str, password: str, db: Session):
 @router.post("/register", response_model=UserResponse)
 def register(user_in: UserCreate, db: Session = Depends(get_db)):
     """Registers a new user."""
+    if user_in.role == UserRole.ADMINISTRATOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator accounts cannot be created through public registration",
+        )
     user = db.query(User).filter(User.email == user_in.email).first()
     if user:
         raise HTTPException(

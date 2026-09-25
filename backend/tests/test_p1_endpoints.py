@@ -336,6 +336,30 @@ class TestSummaryRegenerate:
         assert summary is not None
         assert summary.status == SummaryStatus.FAILED
 
+    def test_failed_regeneration_preserves_previous_completed_summary(self, monkeypatch):
+        user = _make_user("regen-keep-old@test.com")
+        video = _make_video(user)
+        transcript = _make_completed_transcript(video)
+        existing = _make_completed_summary(transcript)
+        old_short = existing.short_summary
+        old_detailed = existing.detailed_summary
+        app.dependency_overrides[summary_router.get_current_user] = lambda: user
+        monkeypatch.setattr(
+            summary_router,
+            "summarize_transcript",
+            lambda _: (_ for _ in ()).throw(ValueError("model failed")),
+        )
+
+        response = client.post(f"/videos/{video.id}/summary/regenerate")
+        assert response.status_code == 500
+
+        db = TestSession()
+        saved = db.query(Summary).filter(Summary.transcript_id == transcript.id).one()
+        db.close()
+        assert saved.status == SummaryStatus.COMPLETED
+        assert saved.short_summary == old_short
+        assert saved.detailed_summary == old_detailed
+
     def test_generate_does_not_regenerate_completed_summary(self, monkeypatch):
         """POST /videos/{id}/summary (no regenerate) must NOT re-run the
         service when the summary is already COMPLETED.

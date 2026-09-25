@@ -4,9 +4,10 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyMomentsPage } from "./KeyMomentsPage";
 
-const { getKeyMoments, generateKeyMoments } = vi.hoisted(() => ({
+const { getKeyMoments, generateKeyMoments, getVideoMediaObjectUrl } = vi.hoisted(() => ({
   getKeyMoments: vi.fn(),
   generateKeyMoments: vi.fn(),
+  getVideoMediaObjectUrl: vi.fn().mockResolvedValue("blob:video-preview"),
 }));
 
 vi.mock("../auth/AuthContext", () => ({
@@ -16,7 +17,7 @@ vi.mock("../auth/AuthContext", () => ({
 vi.mock("../../services/api", () => ({
   getKeyMoments,
   generateKeyMoments,
-  getVideoMediaUrl: () => "/media/video.mp4",
+  getVideoMediaObjectUrl,
 }));
 
 const sampleVideo = {

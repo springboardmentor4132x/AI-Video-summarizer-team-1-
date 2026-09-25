@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+import logging
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -12,6 +13,7 @@ from app.services.summarization_service import summarize_transcript
 
 
 router = APIRouter(tags=["summaries"])
+logger = logging.getLogger(__name__)
 
 
 def _get_owned_video(video_id: int, db: Session, current_user) -> Video:
@@ -54,7 +56,16 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
         return summary
 
     summary.status = SummaryStatus.PROCESSING
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        logger.exception("Summary database failure stage=mark_processing video_id=%s transcript_id=%s", video_id, transcript.id)
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Summary generation failed") from exc
+    summary_id = summary.id
+    previous_values = None
+    if regenerate and summary_id:
+        previous_values = (summary.status, summary.short_summary, summary.detailed_summary)
     try:
         result = summarize_transcript(transcript)
         summary.short_summary = result.short_summary
@@ -64,11 +75,15 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
         db.refresh(summary)
         return summary
     except Exception as exc:
+        logger.exception("Summary persistence/generation failed video_id=%s transcript_id=%s", video_id, transcript.id)
         db.rollback()
-        failed_summary = db.query(Summary).filter(Summary.id == summary.id).first()
-        if failed_summary is not None:
-            failed_summary.status = SummaryStatus.FAILED
-            db.commit()
+        if summary_id:
+            failed_summary = db.query(Summary).filter(Summary.id == summary_id).first()
+            if failed_summary is not None:
+                # Keep the previous completed summary intact when a regeneration fails.
+                had_previous_summary = previous_values and (previous_values[1] or previous_values[2])
+                failed_summary.status = SummaryStatus.COMPLETED if had_previous_summary else SummaryStatus.FAILED
+                db.commit()
         raise HTTPException(status_code=500, detail="Summary generation failed") from exc
 
 
