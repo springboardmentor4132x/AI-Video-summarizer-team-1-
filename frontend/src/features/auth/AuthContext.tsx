@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { getCurrentUser, login as loginRequest } from "../../services/api";
+import { AUTH_EXPIRED_EVENT, getCurrentUser, login as loginRequest } from "../../services/api";
 import type { CurrentUser } from "../../types/auth";
 
 interface AuthContextValue {
@@ -19,6 +19,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [loading, setLoading] = useState(Boolean(token));
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function handleAuthenticationExpired(event: Event) {
+      const expiredToken = (event as CustomEvent<{ token?: string }>).detail?.token;
+      if (expiredToken && token && expiredToken !== token) return;
+      localStorage.removeItem(TOKEN_KEY);
+      setToken(null);
+      setUser(null);
+      setLoading(false);
+      setError("Your session has expired. Please sign in again.");
+    }
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthenticationExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthenticationExpired);
+  }, [token]);
 
   useEffect(() => {
     if (!token) {

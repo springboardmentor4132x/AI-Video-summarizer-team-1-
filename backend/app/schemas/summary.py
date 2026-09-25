@@ -4,6 +4,7 @@ from typing import Optional
 from enum import Enum
 
 class SummaryStatusEnum(str, Enum):
+    NOT_STARTED = "NOT_STARTED"
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"

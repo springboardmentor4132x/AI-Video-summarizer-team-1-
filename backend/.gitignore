@@ -12,3 +12,4 @@ venv/
 # Test databases
 *.sqlite
 *.db
+.pytest_tmp/

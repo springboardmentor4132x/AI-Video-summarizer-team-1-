@@ -5,6 +5,7 @@ from enum import Enum
 
 class TranscriptStatusEnum(str, Enum):
     PENDING = "PENDING"
+    NOT_STARTED = "NOT_STARTED"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"

@@ -2,14 +2,28 @@ import logging
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+    status,
+)
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_user, require_role
+from app.schemas.user import UserRole
+from app.models.summary import Summary, SummaryStatus
+from app.models.transcript import Transcript, TranscriptStatus
 from app.models.video import Video
 from app.schemas.video import VideoResponse, VideoStatusResponse
 from app.services.ffmpeg_service import extract_audio, process_video
+from app.services.highlight_service import extract_highlights_for_key_moments
+from app.services.key_moment_service import detect_key_moments, save_key_moments
 from app.services.transcription_service import transcribe_audio
 
 
@@ -24,6 +38,19 @@ logger = logging.getLogger(__name__)
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 UPLOAD_DIR = BACKEND_DIR / "uploads"
 
+# Configure dedicated background tasks logger once per log file.
+log_path = (BACKEND_DIR / "bg_tasks.log").resolve()
+has_file_handler = any(
+    isinstance(handler, logging.FileHandler)
+    and Path(handler.baseFilename).resolve() == log_path
+    for handler in logger.handlers
+)
+if not has_file_handler:
+    file_handler = logging.FileHandler(log_path)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
+logger.setLevel(logging.INFO)
+
 ALLOWED_EXTENSIONS = {
     ".mp4",
     ".mov",
@@ -32,7 +59,7 @@ ALLOWED_EXTENSIONS = {
     ".webm",
 }
 
-MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
+MAX_FILE_SIZE = 500 * 1024 * 1024
 
 
 def remove_file(path: Path | str) -> None:
@@ -43,89 +70,180 @@ def remove_file(path: Path | str) -> None:
         pass
 
 
-def process_video_background(video_id: int, input_path: str, output_path: str):
-    """
-    Process a video in the background and update its database status.
-    """
-
+def process_video_background(
+    video_id: int,
+    input_path: str,
+    output_path: str,
+):
+    """Run the video, transcript, key-moment, and highlight pipeline."""
     db = SessionLocal()
-
     succeeded = False
     audio_path = None
+    transcript = None
 
     try:
+        logger.info("Starting background processing for video_id: %s. Path: %s", video_id, input_path)
         video = db.query(Video).filter(Video.id == video_id).first()
-
         if video is None:
+            logger.error("Video %s not found", video_id)
             return
+
+        transcript = (
+            db.query(Transcript)
+            .filter(Transcript.video_id == video.id)
+            .first()
+        )
+        if transcript is None:
+            transcript = Transcript(
+                video_id=video.id,
+                status=TranscriptStatus.PENDING,
+            )
+            db.add(transcript)
+            db.flush()
 
         video.status = "processing"
         db.commit()
 
+        logger.info("Starting FFmpeg processing for video_id: %s", video_id)
         succeeded = process_video(
             input_path=input_path,
             output_path=output_path,
         )
-
         if not succeeded:
+            logger.error("Video processing failed for video %s", video_id)
+            transcript.status = TranscriptStatus.FAILED
             video.status = "failed"
             db.commit()
             return
+        logger.info("FFmpeg processing completed for video_id: %s", video_id)
+        
+        # Update file_path to point to the processed video with proper audio encoding
+        video.file_path = output_path
+        db.commit()
+
+        transcript.status = TranscriptStatus.PROCESSING
+        db.commit()
 
         audio_path = UPLOAD_DIR / f"{uuid4()}_transcription.wav"
         extraction = extract_audio(
             video_path=input_path,
             audio_path=str(audio_path),
         )
-
         if extraction.status != "completed" or not extraction.audio_path:
             logger.warning(
                 "Audio extraction failed for video %s: %s",
                 video_id,
                 extraction.error_code,
             )
+            transcript.status = TranscriptStatus.FAILED
             video.status = "completed"
             db.commit()
             return
 
+        logger.info("Starting Whisper transcription for video_id: %s", video_id)
         transcription = transcribe_audio(extraction.audio_path)
-
         if transcription.status != "completed":
             logger.warning(
                 "Transcription failed for video %s: %s",
                 video_id,
                 transcription.error_code,
             )
+            transcript.status = TranscriptStatus.FAILED
+            video.status = "completed"
+            db.commit()
+            return
+        logger.info("Whisper transcription completed for video_id: %s. Segment count: %d", video_id, len(transcription.segments))
+
+        transcript.text = transcription.text
+        transcript.language = transcription.language
+        transcript.segments = transcription.segments
+        transcript.status = TranscriptStatus.COMPLETED
+        db.commit()
+        db.refresh(transcript)
+        logger.info("Starting summary initialization for video_id: %s", video_id)
+        summary = (
+            db.query(Summary)
+            .filter(Summary.transcript_id == transcript.id)
+            .first()
+        )
+        if summary is None:
+            summary = Summary(
+                transcript_id=transcript.id,
+                status=SummaryStatus.PENDING,
+            )
+            db.add(summary)
+        else:
+            summary.short_summary = None
+            summary.detailed_summary = None
+            summary.status = SummaryStatus.PENDING
+        logger.info("Summary initialization completed for video_id: %s", video_id)
+
+        segments = transcript.segments
+        if not segments:
+            logger.info("No transcription segments for video_id: %s, skipping Module 3", video_id)
             video.status = "completed"
             db.commit()
             return
 
-        # transcript = (
-        #     db.query(Transcript)
-        #     .filter(Transcript.video_id == video.id)
-        #     .first()
-        # )
-        # if transcript is None:
-        #     transcript = Transcript(video_id=video.id)
-        #     db.add(transcript)
+        logger.info("Starting Module 3 key moments detection for video_id: %s", video_id)
+        moments = detect_key_moments(
+            segments,
+            threshold=0.30,
+            max_moments=10,
+        )
+        saved_moments = save_key_moments(
+            db=db,
+            video_id=video.id,
+            moments=moments,
+        )
+        logger.info("Module 3 key moments detection completed for video_id: %s. Key moment count: %d", video_id, len(saved_moments))
 
-        # transcript.full_text = transcription.text
-        # transcript.segments = transcription.segments
-        # transcript.language = transcription.language or "en"
-        # transcript.edited = False
-# TODO: Member 2 will inject MongoDB transcript insertion here
-# await mongo_client.save_transcript(video.id, transcription)
+        highlight_dir = UPLOAD_DIR / "highlights" / str(video.id)
+        highlight_results = extract_highlights_for_key_moments(
+            video_path=input_path,
+            moments=saved_moments,
+            output_dir=highlight_dir,
+        )
+
+        for index, moment in enumerate(saved_moments):
+            result = (
+                highlight_results[index]
+                if index < len(highlight_results)
+                else None
+            )
+            if result is None:
+                logger.warning(
+                    "No highlight result for key moment %s of video %s",
+                    moment.id,
+                    video_id,
+                )
+                continue
+            if result.status == "completed":
+                moment.highlight_path = result.highlight_path
+            else:
+                logger.warning(
+                    "Highlight generation failed for key moment %s of video %s: %s",
+                    moment.id,
+                    video_id,
+                    result.error_code,
+                )
 
         video.status = "completed"
-
         db.commit()
+        logger.info("Background processing successfully completed for video_id: %s", video_id)
 
     except Exception:
+        logger.exception("Unexpected error while processing video %s", video_id)
         db.rollback()
-
         try:
+            transcript = (
+                db.query(Transcript)
+                .filter(Transcript.video_id == video_id)
+                .first()
+            )
+            if transcript is not None and transcript.status != TranscriptStatus.COMPLETED:
+                transcript.status = TranscriptStatus.FAILED
             video = db.query(Video).filter(Video.id == video_id).first()
-
             if video:
                 video.status = "failed"
                 db.commit()
@@ -149,27 +267,17 @@ async def upload_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR])),
 ):
-    """
-    Upload a video for the authenticated user.
-    """
-
+    """Upload a video for the authenticated user."""
     try:
         if not file.filename:
-            raise HTTPException(
-                status_code=400,
-                detail="Filename is required",
-            )
+            raise HTTPException(status_code=400, detail="Filename is required")
 
         original_filename = Path(file.filename).name
         extension = Path(original_filename).suffix.lower()
-
         if extension not in ALLOWED_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail="Unsupported video format",
-            )
+            raise HTTPException(status_code=400, detail="Unsupported video format")
 
         try:
             UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -179,8 +287,7 @@ async def upload_video(
                 detail="Unable to prepare video upload storage.",
             ) from exc
 
-        unique_name = f"{uuid4()}{extension}"
-        input_path = UPLOAD_DIR / unique_name
+        input_path = UPLOAD_DIR / f"{uuid4()}{extension}"
         output_path = UPLOAD_DIR / f"{uuid4()}_processed.mp4"
         total_size = 0
 
@@ -188,18 +295,14 @@ async def upload_video(
             with input_path.open("wb") as buffer:
                 while True:
                     chunk = await file.read(1024 * 1024)
-
                     if not chunk:
                         break
-
                     total_size += len(chunk)
-
                     if total_size > MAX_FILE_SIZE:
                         raise HTTPException(
                             status_code=413,
                             detail="Video file is too large. Maximum size is 500 MB.",
                         )
-
                     buffer.write(chunk)
         except HTTPException:
             remove_file(input_path)
@@ -219,7 +322,6 @@ async def upload_video(
         file_path=str(input_path),
         status="uploaded",
     )
-
     try:
         db.add(video)
         db.flush()
@@ -239,8 +341,49 @@ async def upload_video(
         str(input_path),
         str(output_path),
     )
-
     return video
+
+
+@router.get("/", response_model=list[VideoResponse])
+def list_videos(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return videos uploaded by the authenticated user."""
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.uploaded_at.desc())
+        .all()
+    )
+
+
+@router.get("/status", response_model=list[VideoResponse])
+def list_video_statuses(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return processing status records for the authenticated user's videos."""
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.uploaded_at.desc())
+        .all()
+    )
+
+
+@router.get("/history", response_model=list[VideoResponse])
+def list_upload_history(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return upload history derived from the authenticated user's videos."""
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.uploaded_at.desc())
+        .all()
+    )
 
 
 @router.get(
@@ -261,11 +404,22 @@ def get_video_status(
         )
         .first()
     )
-
     if video is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Video not found",
-        )
-
+        raise HTTPException(status_code=404, detail="Video not found")
     return video
+
+
+@router.get("/media/videos/{user_id}/{video_id}")
+def get_video_media(
+    user_id: int,
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Serve only the authenticated user's uploaded source video."""
+    if user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Video not found")
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None or not Path(video.file_path).is_file():
+        raise HTTPException(status_code=404, detail="Video file not found")
+    return FileResponse(video.file_path, media_type="video/mp4", filename=video.filename)
