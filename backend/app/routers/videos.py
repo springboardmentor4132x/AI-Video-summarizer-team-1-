@@ -282,6 +282,7 @@ def generate_summary(video_id: int, db: Session = Depends(get_db), current_user=
     db.commit()
     db.refresh(summary)
     return _summary_payload(summary)
+  feature/namrata-docker-ui-fixes
 
 
 @router.get("/")

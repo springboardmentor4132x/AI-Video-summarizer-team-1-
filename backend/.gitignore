@@ -1,2 +1,20 @@
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
+venv/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Test databases
+*.sqlite
+*.db
+bg_tasks.log
+*.log
+bg_tasks.log
+*.log
+register_test.py
+scripts/

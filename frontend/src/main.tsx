@@ -4,7 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./features/auth/AuthContext";
-import { AnalyticsPage, Dashboard, DashboardRedirect, Login, ProcessingStatusPage, Profile, Register, RoleFeaturePage, UploadHistoryPage, VideoKeyMomentsPage, VideoLibraryPage, VideoResultsPage, VideoSummaryPage, VideoUploadPage } from "./pages";
+import { AnalyticsPage, Dashboard, DashboardRedirect, Login, MCQQuizPage, ProcessingStatusPage, Profile, Register, RoleFeaturePage, UploadHistoryPage, VideoKeyMomentsPage, VideoLibraryPage, VideoResultsPage, VideoSummaryPage, VideoUploadPage } from "./pages";
 import "./styles/global.css";
 import "./styles/modals.css";
 
@@ -24,6 +24,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/creator/upload" element={<VideoUploadPage />} />
                 <Route path="/creator/videos" element={<VideoLibraryPage heading="Manage videos" description="Review the videos you have uploaded and their current processing state." />} />
                 <Route path="/creator/transcripts" element={<VideoLibraryPage heading="Video transcripts" description="Generate, review, edit, and download transcripts for your videos." />} />
+                <Route path="/creator/mcqs" element={<MCQQuizPage />} />
                 <Route path="/creator/transcripts/:videoId" element={<VideoResultsPage />} />
                 <Route path="/creator/summaries/:videoId" element={<VideoSummaryPage />} />
                 <Route path="/creator/key-moments/:videoId" element={<VideoKeyMomentsPage />} />
