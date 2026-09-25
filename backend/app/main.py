@@ -1,8 +1,8 @@
-from fastapi import FastAPI
+
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.auth import router as auth_router
-from app.routers.video import router as video_router
+from app.routers.videos import router as videos_router
 from app.routers.key_moment import router as key_moment_router
 from app.routers.transcript import router as transcript_router
 from app.routers.summary import router as summary_router
@@ -10,7 +10,6 @@ from app.routers.admin import router as admin_router
 from app.routers.analytics import router as analytics_router
 
 app = FastAPI(title="ClipMind AI")
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,10 +22,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Include application routers
 app.include_router(auth_router)
-app.include_router(video_router)
+app.include_router(videos_router)
 app.include_router(key_moment_router)
 app.include_router(transcript_router)
 app.include_router(summary_router)

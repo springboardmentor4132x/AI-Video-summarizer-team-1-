@@ -1,3 +1,5 @@
+import enum
+
 from sqlalchemy import (
     Column,
     Integer,
@@ -12,7 +14,6 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
-import enum
 
 
 class TranscriptStatus(str, enum.Enum):
@@ -29,11 +30,9 @@ class Transcript(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     text = Column(Text, nullable=True)
-    # Detected/source language, for example: "en", "es", "fr"
     language = Column(String(10), nullable=True)
-
-    # Timestamped Whisper segments stored as JSON
-    segments = Column(JSON, nullable=True)
+    segments = Column(JSON, nullable=True, default=list)
+    error_message = Column(Text, nullable=True)
 
     status = Column(
         Enum(TranscriptStatus),
@@ -48,22 +47,19 @@ class Transcript(Base):
 
     updated_at = Column(
         DateTime(timezone=True),
+        default=func.now(),
         onupdate=func.now(),
     )
 
-    # One transcript per video
     video_id = Column(
         Integer,
         ForeignKey("videos.id"),
         nullable=False,
         unique=True,
     )
-    # Relationships
-    video = relationship(
-        "Video",
-        back_populates="transcript",
-    )
 
+    video = relationship("Video", back_populates="transcript")
+    
     summary = relationship(
         "Summary",
         back_populates="transcript",

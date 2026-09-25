@@ -13,3 +13,4 @@ venv/
 *.sqlite
 *.db
 .pytest_tmp/
+bg_tasks.log
