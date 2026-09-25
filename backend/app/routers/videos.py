@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db
 from app.dependencies.auth import get_current_user
-from app.models.transcript import Summary, SummaryStatus, Transcript, TranscriptStatus
+from app.models.transcript import Transcript, TranscriptStatus
+from app.models.summary import Summary, SummaryStatus
 from app.models.video import Video
 from app.services.ffmpeg_service import extract_audio, process_video
 from app.services.summary_service import generate_summary_from_transcript
@@ -281,3 +282,21 @@ def generate_summary(video_id: int, db: Session = Depends(get_db), current_user=
     db.commit()
     db.refresh(summary)
     return _summary_payload(summary)
+  feature/namrata-docker-ui-fixes
+
+
+@router.get("/")
+def list_videos(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Fetch all videos belonging to the current user."""
+    videos = db.query(Video).filter(Video.user_id == current_user.id).all()
+    
+    # Format the response to match what the React frontend expects
+    return [
+        {
+            "id": video.id,
+            "filename": video.filename,
+            "status": video.status,
+            "created_at": video.created_at.isoformat() if video.created_at else None,
+        }
+        for video in videos
+    ]
