@@ -108,7 +108,21 @@ strong { color: var(--text); }
   border-right: 1px solid var(--border);
   box-shadow: inset -1px 0 0 rgba(255,255,255,0.02);
 }
-.brand-wrap { display: flex; align-items: center; }
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+.brand-wrap { 
+  display: flex; 
+  align-items: center; 
+  cursor: pointer;
+  outline: none;
+}
+.brand-wrap:hover .brand-mark {
+  transform: scale(1.05);
+}
 .brand {
   display: flex;
   align-items: center;
@@ -127,6 +141,21 @@ strong { color: var(--text); }
   background: linear-gradient(135deg, rgba(124, 107, 255, 0.95), rgba(34, 211, 238, 0.9));
   color: #F8FAFC;
   box-shadow: 0 10px 30px rgba(124, 107, 255, 0.35);
+  transition: transform 0.2s ease;
+}
+.mobile-toggle {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--text-soft);
+  padding: 4px;
+  box-shadow: none;
+}
+.mobile-toggle:hover { color: var(--text); }
+.sidebar-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
 }
 .identity {
   display: grid;
@@ -2550,5 +2579,45 @@ form { display: grid; gap: 18px; }
 .phase5-horizontal-chart { display: grid; gap: 9px; }.phase5-chart-row { display: grid; grid-template-columns: minmax(105px, .9fr) 2fr auto; align-items: center; gap: 10px; width: 100%; padding: 6px 0; border: 0; background: transparent; color: var(--text-soft); text-align: left; }.phase5-chart-row:hover { color: var(--text); }.phase5-chart-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }.phase5-chart-track { display: block; height: 8px; overflow: hidden; border-radius: 99px; background: rgba(148, 163, 184, .11); }.phase5-chart-track i { display: block; height: 100%; min-width: 3px; border-radius: inherit; background: linear-gradient(90deg, var(--primary), var(--secondary)); }.phase5-chart-row strong { min-width: 45px; color: var(--text); font-size: 11px; text-align: right; }.phase5-chart-row:focus-visible { outline: 2px solid var(--secondary); outline-offset: 3px; border-radius: 5px; }
 .phase5-chart-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 8px; color: var(--text-soft); font-size: 10px; }.phase5-chart-legend span { display: inline-flex; align-items: center; gap: 6px; }.phase5-chart-legend i { width: 8px; height: 8px; border-radius: 50%; }.phase5-multi-chart { height: 220px; }.phase5-series-line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .compression-chart { display: grid; gap: 18px; }.compression-bars { display: flex; align-items: end; justify-content: center; gap: 44px; height: 210px; padding: 0 18px 27px; border-bottom: 1px solid var(--border); }.compression-bars > div { display: grid; justify-items: center; align-items: end; gap: 8px; height: 100%; width: 72px; }.compression-bars span { color: var(--text-soft); font-size: 10px; text-align: center; }.compression-bars i { display: block; width: 46px; min-height: 3px; border-radius: 7px 7px 0 0; background: linear-gradient(180deg, var(--secondary), var(--primary)); }.compression-bars > div:nth-child(2) i { background: linear-gradient(180deg, var(--warning), #F97316); }.compression-bars strong { color: var(--text); font: 600 16px var(--header-font); }.compression-chart p { color: var(--text-muted); font-size: 11px; }.compression-chart p strong { color: var(--secondary); }
-@media (max-width: 780px) { .analytics-chart-grid { grid-template-columns: 1fr; }.analytics-chart-wide { grid-column: auto; } }
+@media (max-width: 780px) {
+  .app-shell { display: flex; flex-direction: column; }
+  .sidebar {
+    width: 100%;
+    min-height: auto;
+    padding: 16px 20px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    background: rgba(15, 23, 42, 0.98);
+    backdrop-filter: blur(12px);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+  .mobile-toggle { display: grid; place-items: center; }
+  
+  .sidebar-content {
+    display: none;
+    animation: fadeIn 0.2s ease-out;
+  }
+  .sidebar.open .sidebar-content {
+    display: flex;
+    padding-top: 10px;
+    padding-bottom: 8px;
+  }
+  
+  .nav-list { display: grid; gap: 6px; }
+  .sidebar-footer { margin-top: 24px; padding-top: 18px; }
+  
+  .dashboard-page, .simple-page { padding: 32px 20px 48px; }
+  .page-header, .section-heading, .welcome-panel { display: block; }
+  .status-pill { display: inline-flex; margin-top: 18px; }
+  .action-grid, .recent-videos, .workflow-grid, .stats-grid { grid-template-columns: 1fr; }
+  
+  .login-page { grid-template-columns: 1fr; }
+  .login-art { min-height: 310px; padding: 24px; }
+  .art-copy { left: 24px; bottom: 32px; }
+  .art-copy p, .orbit-card { display: none; }
+  .login-panel { min-height: 490px; }
+}
+
 @media (max-width: 520px) { .phase5-chart-row { grid-template-columns: minmax(85px, .9fr) 1.5fr auto; gap: 7px; }.phase5-chart-label { font-size: 10px; }.compression-bars { gap: 28px; } }

@@ -2018,24 +2018,214 @@ export function Login() {
 
 export function Register() {
   const navigate = useNavigate();
-  const [form, setForm] = useState({ full_name: "", email: "", password: "", confirm_password: "", role: "Learner" });
+  // Using 'name' natively in the state object
+  const [form, setForm] = useState({ name: "", email: "", password: "", confirm_password: "", role: "Content Creator" });  
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  function update(field: keyof typeof form, value: string) { setForm(current => ({ ...current, [field]: value })); }
+  
+  function update(field: keyof typeof form, value: string) { setForm(current => ({ ...current, [field]: value })); }  
+  
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
     if (form.password.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (form.password !== form.confirm_password) { setError("Passwords do not match."); return; }
     setBusy(true);
-    try { await registerRequest(form); setSuccess("Account created. Redirecting to sign in..."); setTimeout(() => navigate("/login"), 700); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Registration failed."); }
+    
+    try { 
+      // Explicitly drop confirm_password
+      const payload = {
+        name: form.name,
+        email: form.email,
+        password: form.password,
+        role: form.role 
+      };
+      
+      await registerRequest(payload as any); 
+      setSuccess("Account created. Redirecting to sign in..."); 
+      setTimeout(() => navigate("/login"), 700); 
+    }
+    catch (reason) { 
+      console.error("Full Registration Error:", reason);
+      setError(reason instanceof Error ? reason.message : "Registration failed."); 
+    }
     finally { setBusy(false); }
   }
-  return <main className="login-page"><div className="login-art"><div className="brand"><span className="brand-mark"><Clapperboard size={18} /></span><span>ClipMind <em>AI</em></span></div><div className="art-copy"><span className="eyebrow">Start your workspace</span><h1>Give every frame somewhere useful to go.</h1><p>Create a role-aware ClipMind account for making, learning, teaching, or operating.</p></div></div><div className="login-panel"><div className="form-wrap"><span className="eyebrow">New account</span><h2>Join ClipMind</h2><p className="form-intro">Your role determines the workspace and permissions you receive.</p><form onSubmit={submit}><label>👤 Full name<input value={form.full_name} onChange={event => update("full_name", event.target.value)} required /></label><label>📧 Email<input type="email" value={form.email} onChange={event => update("email", event.target.value)} required /></label><label>🎭 Role<select value={form.role} onChange={event => update("role", event.target.value)}><option>Content Creator</option><option>Learner</option><option>Educator</option><option>Administrator</option></select></label><label>🔐 Password<input type="password" value={form.password} onChange={event => update("password", event.target.value)} minLength={8} required /></label><label>🔐 Confirm password<input type="password" value={form.confirm_password} onChange={event => update("confirm_password", event.target.value)} minLength={8} required /></label>{error && <p className="form-error" role="alert">{error}</p>}{success && <p className="upload-success" role="status">{success}</p>}<button className="primary-button" disabled={busy}>{busy ? "Creating account..." : "Create account"}</button></form><Link className="auth-link" to="/login">Back to sign in</Link></div></div></main>;
+  
+  return (
+    <main className="login-page">
+      <div className="login-art">
+        <div className="brand"><span className="brand-mark"><Clapperboard size={18} /></span><span>ClipMind <em>AI</em></span></div>
+        <div className="art-copy"><span className="eyebrow">Start your workspace</span><h1>Give every frame somewhere useful to go.</h1><p>Create a role-aware ClipMind account for making, learning, teaching, or operating.</p></div>
+      </div>
+      <div className="login-panel">
+        <div className="form-wrap">
+          <span className="eyebrow">New account</span>
+          <h2>Join ClipMind</h2>
+          <p className="form-intro">Your role determines the workspace and permissions you receive.</p>
+          <form onSubmit={submit}>
+            <label>👤 Full name<input value={form.name} onChange={event => update("name", event.target.value)} required /></label>
+            <label>📧 Email<input type="email" value={form.email} onChange={event => update("email", event.target.value)} required /></label>
+            <label>🎭 Role
+              <select value={form.role} onChange={event => update("role", event.target.value)}>
+                <option>Content Creator</option>
+                <option>Learner</option>
+                <option>Educator</option>
+                <option>Administrator</option>
+              </select>
+            </label>
+            <label>🔐 Password<input type="password" value={form.password} onChange={event => update("password", event.target.value)} minLength={8} required /></label>
+            <label>🔐 Confirm password<input type="password" value={form.confirm_password} onChange={event => update("confirm_password", event.target.value)} minLength={8} required /></label>
+            {error && <p className="form-error" role="alert">{error}</p>}
+            {success && <p className="upload-success" role="status">{success}</p>}
+            <button className="primary-button" disabled={busy}>{busy ? "Creating account..." : "Create account"}</button>
+          </form>
+          <Link className="auth-link" to="/login">Back to sign in</Link>
+        </div>
+      </div>
+    </main>
+  );
 }
 
-export function Profile() { const { user } = useAuth(); if (!user) return <Navigate to="/login" replace />; return <section className="simple-page"><span className="eyebrow">Account</span><h1>Your profile</h1><div className="profile-card"><div className="avatar">{user.full_name.slice(0, 1)}</div><div><h2>{user.full_name}</h2><p>{user.email}</p><span className="role-badge">{user.role}</span></div></div></section>; }
+export function Profile() { 
+  const { user } = useAuth(); 
+  const [isEditing, setIsEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error", text: string } | null>(null);
+  
+  // Safe display name fallback
+  const displayName = user?.full_name || (user as any)?.name || "ClipMind User";
+
+  // Form state
+  const [formData, setFormData] = useState({
+    name: displayName,
+    email: user?.email || ""
+  });
+
+  if (!user) return <Navigate to="/login" replace />; 
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setMessage(null);
+
+    try {
+      // TODO: Connect to your FastAPI backend once the endpoint is merged!
+      // Example: await updateProfile(token, { name: formData.name });
+      
+      // Simulating a network request for now
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      setMessage({ type: "success", text: "Profile details saved successfully!" });
+      setIsEditing(false);
+      
+      // Note: In reality, you'd also want to trigger a React Context update 
+      // here so the sidebar avatar re-renders with the new name.
+    } catch (error) {
+      setMessage({ type: "error", text: "Failed to update profile details." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="simple-page">
+      <div className="page-header narrow">
+        <div>
+          <span className="eyebrow">Account Settings</span>
+          <h1>Your profile</h1>
+          <p className="feature-description">Manage your ClipMind AI account details and workspace preferences.</p>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gap: "24px", maxWidth: "760px" }}>
+        {/* Top Identification Card */}
+        <div className="profile-card" style={{ margin: 0, maxWidth: "100%" }}>
+          <div className="avatar">{displayName.slice(0, 1).toUpperCase()}</div>
+          <div>
+            <h2>{displayName}</h2>
+            <p>{user.email}</p>
+            <span className="role-badge">{user.role}</span>
+          </div>
+        </div>
+
+        {/* Editable Details Card */}
+        <div className="upload-card" style={{ padding: "28px" }}>
+          <div className="card-header-row" style={{ marginBottom: "20px" }}>
+            <strong style={{ fontSize: "18px", color: "var(--text)" }}>Personal Information</strong>
+            {!isEditing && (
+              <button className="secondary-button compact-button" onClick={() => setIsEditing(true)}>
+                Edit Details
+              </button>
+            )}
+          </div>
+
+          {message && (
+            <div className={`upload-alert ${message.type}`} role="status" style={{ marginBottom: "20px" }}>
+              <div className="alert-icon">{message.type === "success" ? "✅" : "❌"}</div>
+              <div className="alert-copy">
+                <strong>{message.type === "success" ? "Success" : "Error"}</strong>
+                <p>{message.text}</p>
+              </div>
+            </div>
+          )}
+
+          {isEditing ? (
+            <form onSubmit={handleSubmit} style={{ display: "grid", gap: "18px" }}>
+              <label>
+                Full Name
+                <input 
+                  type="text"
+                  value={formData.name} 
+                  onChange={e => setFormData(current => ({ ...current, name: e.target.value }))}
+                  required 
+                />
+              </label>
+              <label>
+                Email Address
+                <input 
+                  type="email" 
+                  value={formData.email} 
+                  onChange={e => setFormData(current => ({ ...current, email: e.target.value }))}
+                  disabled 
+                  title="Email addresses cannot be changed directly."
+                  style={{ opacity: 0.6, cursor: "not-allowed" }}
+                />
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "normal" }}>
+                  Contact an administrator to change your workspace email.
+                </span>
+              </label>
+              
+              <div className="file-actions" style={{ marginTop: "12px", justifyContent: "flex-end" }}>
+                <button type="button" className="secondary-button" onClick={() => setIsEditing(false)} disabled={busy}>
+                  Cancel
+                </button>
+                <button type="submit" className="primary-button" disabled={busy}>
+                  {busy ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div style={{ display: "grid", gap: "18px", color: "var(--text-soft)", fontSize: "14px" }}>
+              <div style={{ display: "grid", gap: "6px" }}>
+                <strong style={{ color: "var(--text)" }}>Full Name</strong>
+                <span>{displayName}</span>
+              </div>
+              <div style={{ display: "grid", gap: "6px" }}>
+                <strong style={{ color: "var(--text)" }}>Email Address</strong>
+                <span>{user.email}</span>
+              </div>
+              <div style={{ display: "grid", gap: "6px" }}>
+                <strong style={{ color: "var(--text)" }}>Workspace Role</strong>
+                <span>{user.role}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  ); 
+}
 
 export { Dashboard };

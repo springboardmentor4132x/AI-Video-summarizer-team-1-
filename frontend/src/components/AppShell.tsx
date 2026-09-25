@@ -1,5 +1,10 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { BarChart3, BookOpen, Film, LayoutDashboard, LogOut, MonitorCog, ShieldCheck, Upload, UserRound, Users, FolderKanban, FileText, History, Sparkles } from "lucide-react";
+import { 
+  BarChart3, BookOpen, Film, LayoutDashboard, LogOut, 
+  MonitorCog, ShieldCheck, Upload, UserRound, Users, 
+  FolderKanban, FileText, History, Sparkles, Menu, X 
+} from "lucide-react";
 import { useAuth } from "../features/auth/AuthContext";
 import type { Role } from "../types/auth";
 
@@ -33,62 +38,107 @@ const roleNavigation: Record<Role, { label: string; path: string; icon: typeof F
 
 export function AppShell() {
   const { user, logout } = useAuth();
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   if (!user) return null;
 
-  const initials = user.full_name
+  const displayName = user.full_name || (user as any).name || "ClipMind User";
+  
+  const initials = displayName
     .split(" ")
     .filter(Boolean)
     .slice(0, 2)
-    .map(part => part[0]?.toUpperCase() ?? "")
+    .map((part: string) => part[0]?.toUpperCase() ?? "")
     .join("") || "C";
 
   const dashboardPath = `/dashboard/${user.role.toLowerCase().replace(" ", "-")}`;
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-wrap">
-          <div className="brand">
-            <span className="brand-mark"><Film size={18} /></span>
-            <span className="brand-copy">ClipMind <em>AI</em></span>
-          </div>
-        </div>
-
-        <div className="identity">
-          <div className="identity-header">
-            <div className="user-avatar" aria-label={`${user.full_name} avatar`}>{initials}</div>
-            <div className="identity-copy">
-              <strong>{user.full_name}</strong>
-              <span className="role-badge">{user.role}</span>
+      <aside className={`sidebar ${isMobileMenuOpen ? "open" : ""}`}>
+        
+        <div className="sidebar-header">
+          {/* Logo with Refresh Action */}
+          <div 
+            className="brand-wrap" 
+            onClick={() => window.location.reload()} 
+            role="button" 
+            tabIndex={0}
+            title="Refresh App"
+          >
+            <div className="brand">
+              <span className="brand-mark"><Film size={18} /></span>
+              <span className="brand-copy">ClipMind <em>AI</em></span>
             </div>
           </div>
-        </div>
 
-        <nav className="nav-list" aria-label="Sidebar navigation">
-          <div className="nav-section-label">Main</div>
-          <NavLink to={dashboardPath} className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}>
-            <LayoutDashboard size={17} />
-            <span>Dashboard</span>
-          </NavLink>
-          {roleNavigation[user.role].map(({ label, path, icon: Icon }) => (
-            <NavLink key={path} to={path} className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}>
-              <Icon size={17} />
-              <span>{label}</span>
-            </NavLink>
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="nav-section-label">Account</div>
-          <NavLink to="/profile" className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}>
-            <UserRound size={17} />
-            <span>Profile</span>
-          </NavLink>
-          <button className="logout" type="button" onClick={logout}>
-            <LogOut size={17} />
-            <span>Sign out</span>
+          {/* Mobile Hamburger Toggle */}
+          <button 
+            className="mobile-toggle" 
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            aria-label="Toggle mobile menu"
+          >
+            {isMobileMenuOpen ? <X size={26} /> : <Menu size={26} />}
           </button>
         </div>
+
+        {/* Collapsible Content */}
+        <div className="sidebar-content">
+          <div className="identity">
+            <div className="identity-header">
+              <div className="user-avatar" aria-label={`${displayName} avatar`}>{initials}</div>
+              <div className="identity-copy">
+                <strong>{displayName}</strong>
+                <span className="role-badge">{user.role}</span>
+              </div>
+            </div>
+          </div>
+
+          <nav className="nav-list" aria-label="Sidebar navigation">
+            <div className="nav-section-label">Main</div>
+            <NavLink 
+              to={dashboardPath} 
+              onClick={() => setIsMobileMenuOpen(false)}
+              className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
+            >
+              <LayoutDashboard size={17} />
+              <span>Dashboard</span>
+            </NavLink>
+            
+            {roleNavigation[user.role].map(({ label, path, icon: Icon }) => (
+              <NavLink 
+                key={path} 
+                to={path} 
+                onClick={() => setIsMobileMenuOpen(false)}
+                className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
+              >
+                <Icon size={17} />
+                <span>{label}</span>
+              </NavLink>
+            ))}
+          </nav>
+
+          <div className="sidebar-footer">
+            <div className="nav-section-label">Account</div>
+            <NavLink 
+              to="/profile" 
+              onClick={() => setIsMobileMenuOpen(false)}
+              className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
+            >
+              <UserRound size={17} />
+              <span>Profile</span>
+            </NavLink>
+            <button 
+              className="logout" 
+              type="button" 
+              onClick={() => { setIsMobileMenuOpen(false); logout(); }}
+            >
+              <LogOut size={17} />
+              <span>Sign out</span>
+            </button>
+          </div>
+        </div>
+
       </aside>
       <main className="main-content"><Outlet /></main>
     </div>
