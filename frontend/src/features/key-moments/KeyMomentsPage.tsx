@@ -25,7 +25,7 @@ export function KeyMomentsPage() {
     if (!token || !videoId) return;
     setLoading(true);
     getKeyMoments(token, videoId)
-      .then(result => setMoments(Array.isArray(result) ? result : result.key_moments))
+      .then(result => setMoments(result.key_moments))
       .catch(reason => setError(reason instanceof Error ? reason.message : "Key moments could not be loaded."))
       .finally(() => setLoading(false));
   }, [token, videoId]);
@@ -59,7 +59,11 @@ export function KeyMomentsPage() {
     setError(null);
     try {
       const result = await generateKeyMoments(token, videoId);
+<<<<<<< HEAD
       setMoments(Array.isArray(result) ? result : result.key_moments);
+=======
+      setMoments(result.key_moments);
+>>>>>>> main
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Key moments could not be generated.");
     } finally {
