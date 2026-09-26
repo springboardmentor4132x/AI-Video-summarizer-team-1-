@@ -1,6 +1,6 @@
 import type { CurrentUser, LoginResponse } from "../types/auth";
 import { API_BASE_URL, withApiBase } from "../config";
-
+export const AUTH_EXPIRED_EVENT = "clipmind:auth-expired";
 export interface VideoUploadResponse {
   id: string;
   filename: string;
