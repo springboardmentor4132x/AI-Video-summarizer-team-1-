@@ -17,7 +17,7 @@ class Summary(Base):
     id = Column(Integer, primary_key=True, index=True)
     short_summary = Column(Text, nullable=True)
     detailed_summary = Column(Text, nullable=True)
-    status = Column(Enum(SummaryStatus), default=SummaryStatus.NOT_STARTED)
+    status = Column(Enum(SummaryStatus), default=SummaryStatus.PENDING)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

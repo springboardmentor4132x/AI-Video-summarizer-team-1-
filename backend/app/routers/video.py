@@ -11,10 +11,12 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_user, require_role
+from app.schemas.user import UserRole
 from app.models.summary import Summary, SummaryStatus
 from app.models.transcript import Transcript, TranscriptStatus
 from app.models.video import Video
@@ -35,6 +37,19 @@ logger = logging.getLogger(__name__)
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 UPLOAD_DIR = BACKEND_DIR / "uploads"
+
+# Configure dedicated background tasks logger once per log file.
+log_path = (BACKEND_DIR / "bg_tasks.log").resolve()
+has_file_handler = any(
+    isinstance(handler, logging.FileHandler)
+    and Path(handler.baseFilename).resolve() == log_path
+    for handler in logger.handlers
+)
+if not has_file_handler:
+    file_handler = logging.FileHandler(log_path)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
+logger.setLevel(logging.INFO)
 
 ALLOWED_EXTENSIONS = {
     ".mp4",
@@ -67,6 +82,7 @@ def process_video_background(
     transcript = None
 
     try:
+        logger.info("Starting background processing for video_id: %s. Path: %s", video_id, input_path)
         video = db.query(Video).filter(Video.id == video_id).first()
         if video is None:
             logger.error("Video %s not found", video_id)
@@ -88,6 +104,7 @@ def process_video_background(
         video.status = "processing"
         db.commit()
 
+        logger.info("Starting FFmpeg processing for video_id: %s", video_id)
         succeeded = process_video(
             input_path=input_path,
             output_path=output_path,
@@ -98,6 +115,11 @@ def process_video_background(
             video.status = "failed"
             db.commit()
             return
+        logger.info("FFmpeg processing completed for video_id: %s", video_id)
+        
+        # Update file_path to point to the processed video with proper audio encoding
+        video.file_path = output_path
+        db.commit()
 
         transcript.status = TranscriptStatus.PROCESSING
         db.commit()
@@ -118,6 +140,7 @@ def process_video_background(
             db.commit()
             return
 
+        logger.info("Starting Whisper transcription for video_id: %s", video_id)
         transcription = transcribe_audio(extraction.audio_path)
         if transcription.status != "completed":
             logger.warning(
@@ -129,12 +152,15 @@ def process_video_background(
             video.status = "completed"
             db.commit()
             return
+        logger.info("Whisper transcription completed for video_id: %s. Segment count: %d", video_id, len(transcription.segments))
 
         transcript.text = transcription.text
         transcript.language = transcription.language
         transcript.segments = transcription.segments
         transcript.status = TranscriptStatus.COMPLETED
-        db.flush()
+        db.commit()
+        db.refresh(transcript)
+        logger.info("Starting summary initialization for video_id: %s", video_id)
         summary = (
             db.query(Summary)
             .filter(Summary.transcript_id == transcript.id)
@@ -143,20 +169,23 @@ def process_video_background(
         if summary is None:
             summary = Summary(
                 transcript_id=transcript.id,
-                status=SummaryStatus.NOT_STARTED,
+                status=SummaryStatus.PENDING,
             )
             db.add(summary)
         else:
             summary.short_summary = None
             summary.detailed_summary = None
-            summary.status = SummaryStatus.NOT_STARTED
+            summary.status = SummaryStatus.PENDING
+        logger.info("Summary initialization completed for video_id: %s", video_id)
 
         segments = transcript.segments
         if not segments:
+            logger.info("No transcription segments for video_id: %s, skipping Module 3", video_id)
             video.status = "completed"
             db.commit()
             return
 
+        logger.info("Starting Module 3 key moments detection for video_id: %s", video_id)
         moments = detect_key_moments(
             segments,
             threshold=0.30,
@@ -167,6 +196,7 @@ def process_video_background(
             video_id=video.id,
             moments=moments,
         )
+        logger.info("Module 3 key moments detection completed for video_id: %s. Key moment count: %d", video_id, len(saved_moments))
 
         highlight_dir = UPLOAD_DIR / "highlights" / str(video.id)
         highlight_results = extract_highlights_for_key_moments(
@@ -200,6 +230,7 @@ def process_video_background(
 
         video.status = "completed"
         db.commit()
+        logger.info("Background processing successfully completed for video_id: %s", video_id)
 
     except Exception:
         logger.exception("Unexpected error while processing video %s", video_id)
@@ -210,7 +241,7 @@ def process_video_background(
                 .filter(Transcript.video_id == video_id)
                 .first()
             )
-            if transcript is not None:
+            if transcript is not None and transcript.status != TranscriptStatus.COMPLETED:
                 transcript.status = TranscriptStatus.FAILED
             video = db.query(Video).filter(Video.id == video_id).first()
             if video:
@@ -236,7 +267,7 @@ async def upload_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR])),
 ):
     """Upload a video for the authenticated user."""
     try:
@@ -313,6 +344,48 @@ async def upload_video(
     return video
 
 
+@router.get("/", response_model=list[VideoResponse])
+def list_videos(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return videos uploaded by the authenticated user."""
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.uploaded_at.desc())
+        .all()
+    )
+
+
+@router.get("/status", response_model=list[VideoResponse])
+def list_video_statuses(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return processing status records for the authenticated user's videos."""
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.uploaded_at.desc())
+        .all()
+    )
+
+
+@router.get("/history", response_model=list[VideoResponse])
+def list_upload_history(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return upload history derived from the authenticated user's videos."""
+    return (
+        db.query(Video)
+        .filter(Video.user_id == current_user.id)
+        .order_by(Video.uploaded_at.desc())
+        .all()
+    )
+
+
 @router.get(
     "/{video_id}/status",
     response_model=VideoStatusResponse,
@@ -334,3 +407,19 @@ def get_video_status(
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video
+
+
+@router.get("/media/videos/{user_id}/{video_id}")
+def get_video_media(
+    user_id: int,
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Serve only the authenticated user's uploaded source video."""
+    if user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Video not found")
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None or not Path(video.file_path).is_file():
+        raise HTTPException(status_code=404, detail="Video file not found")
+    return FileResponse(video.file_path, media_type="video/mp4", filename=video.filename)

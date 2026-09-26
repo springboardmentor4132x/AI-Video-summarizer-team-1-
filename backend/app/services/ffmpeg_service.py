@@ -2,6 +2,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 ExtractionStatus = Literal["completed", "failed"]
@@ -155,9 +158,15 @@ def process_video(input_path: str, output_path: str) -> bool:
         if result.returncode == 0:
             return True
 
+        logger.error(
+            "FFmpeg processing failed with return code %s. stderr: %s",
+            result.returncode,
+            getattr(result, "stderr", ""),
+        )
         remove_output_file(output_file)
         return False
 
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.exception("FFmpeg subprocess error: %s", exc)
         remove_output_file(output_file)
         return False

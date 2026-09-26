@@ -1,7 +1,7 @@
 """Add language, segments, and summary models
 
 Revision ID: 61b0338b2c08
-Revises: 
+Revises:
 Create Date: 2026-09-08 18:22:46.334146
 
 """
@@ -61,7 +61,7 @@ def upgrade() -> None:
             highlight_path VARCHAR
         )
     """)
-    
+
     # Create indexes if they don't exist
     op.execute("CREATE INDEX IF NOT EXISTS ix_key_moments_id ON key_moments (id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_key_moments_video_id ON key_moments (video_id)")

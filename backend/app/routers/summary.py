@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+import logging
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.video import get_owned_video
+from app.dependencies.auth import get_current_user, require_role
+from app.schemas.user import UserRole
 from app.models.summary import Summary, SummaryStatus
 from app.models.transcript import TranscriptStatus
 from app.models.video import Video
@@ -11,9 +13,18 @@ from app.services.summarization_service import summarize_transcript
 
 
 router = APIRouter(tags=["summaries"])
+logger = logging.getLogger(__name__)
 
 
-def _get_summary(video: Video) -> Summary:
+def _get_owned_video(video_id: int, db: Session, current_user) -> Video:
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return video
+
+
+def _get_summary(video_id: int, db: Session, current_user) -> Summary:
+    video = _get_owned_video(video_id, db, current_user)
     if video.transcript is None or video.transcript.summary is None:
         raise HTTPException(status_code=404, detail="Summary not found")
     return video.transcript.summary
@@ -21,11 +32,12 @@ def _get_summary(video: Video) -> Summary:
 
 @router.get("/summaries/{video_id}", response_model=SummaryResponse)
 @router.get("/videos/{video_id}/summary", response_model=SummaryResponse)
-def get_summary(video: Video = Depends(get_owned_video)):
-    return _get_summary(video)
+def get_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    return _get_summary(video_id, db, current_user)
 
 
-def _generate_summary(video: Video, db: Session, regenerate: bool = False) -> Summary:
+def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool = False) -> Summary:
+    video = _get_owned_video(video_id, db, current_user)
     transcript = video.transcript
     if transcript is None:
         raise HTTPException(status_code=404, detail="Transcript not found")
@@ -34,7 +46,7 @@ def _generate_summary(video: Video, db: Session, regenerate: bool = False) -> Su
 
     summary = transcript.summary
     if summary is None:
-        summary = Summary(transcript_id=transcript.id, status=SummaryStatus.NOT_STARTED)
+        summary = Summary(transcript_id=transcript.id, status=SummaryStatus.PENDING)
         db.add(summary)
         db.flush()
 
@@ -44,7 +56,16 @@ def _generate_summary(video: Video, db: Session, regenerate: bool = False) -> Su
         return summary
 
     summary.status = SummaryStatus.PROCESSING
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        logger.exception("Summary database failure stage=mark_processing video_id=%s transcript_id=%s", video_id, transcript.id)
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Summary generation failed") from exc
+    summary_id = summary.id
+    previous_values = None
+    if regenerate and summary_id:
+        previous_values = (summary.status, summary.short_summary, summary.detailed_summary)
     try:
         result = summarize_transcript(transcript)
         summary.short_summary = result.short_summary
@@ -54,20 +75,24 @@ def _generate_summary(video: Video, db: Session, regenerate: bool = False) -> Su
         db.refresh(summary)
         return summary
     except Exception as exc:
+        logger.exception("Summary persistence/generation failed video_id=%s transcript_id=%s", video_id, transcript.id)
         db.rollback()
-        failed_summary = db.query(Summary).filter(Summary.id == summary.id).first()
-        if failed_summary is not None:
-            failed_summary.status = SummaryStatus.FAILED
-            db.commit()
+        if summary_id:
+            failed_summary = db.query(Summary).filter(Summary.id == summary_id).first()
+            if failed_summary is not None:
+                # Keep the previous completed summary intact when a regeneration fails.
+                had_previous_summary = previous_values and (previous_values[1] or previous_values[2])
+                failed_summary.status = SummaryStatus.COMPLETED if had_previous_summary else SummaryStatus.FAILED
+                db.commit()
         raise HTTPException(status_code=500, detail="Summary generation failed") from exc
 
 
 @router.post("/summaries/{video_id}/generate", response_model=SummaryResponse, status_code=status.HTTP_200_OK)
 @router.post("/videos/{video_id}/summary", response_model=SummaryResponse, status_code=status.HTTP_200_OK)
-def generate_summary(video: Video = Depends(get_owned_video), db: Session = Depends(get_db)):
-    return _generate_summary(video, db)
+def generate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR]))):
+    return _generate_summary(video_id, db, current_user)
 
 
 @router.post("/videos/{video_id}/summary/regenerate", response_model=SummaryResponse)
-def regenerate_summary(video: Video = Depends(get_owned_video), db: Session = Depends(get_db)):
-    return _generate_summary(video, db, regenerate=True)
+def regenerate_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR]))):
+    return _generate_summary(video_id, db, current_user, regenerate=True)
