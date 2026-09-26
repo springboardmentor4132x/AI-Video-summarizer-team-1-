@@ -1,9 +1,10 @@
-"""Explainable, timestamp-preserving key-moment detection for Module 3."""
+﻿"""Explainable, timestamp-preserving key-moment detection for Module 3."""
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
 import math
+import os
 import re
 from typing import Any
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.key_moment import KeyMoment as KeyMomentModel
 from app.services.embedding_service import generate_embeddings
+from app.services.keyword_extraction_service import extract_keyphrases
 
 STOP_WORDS = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "could", "do", "does", "for", "from", "had", "has", "have", "he", "her", "his", "how", "i", "if", "in", "into", "is", "it", "its", "just", "me", "more", "my", "of", "on", "or", "our", "so", "than", "that", "the", "their", "them", "there", "these", "they", "this", "to", "was", "we", "were", "what", "when", "which", "who", "will", "with", "you", "your"}
 _CONTINUATION_WORDS = {"so", "but", "and", "because", "since", "when", "while", "though", "however"}
@@ -92,7 +94,15 @@ def calculate_similarities(embeddings: np.ndarray) -> list[float]:
     return [cosine_similarity(embeddings[i], embeddings[i + 1]) for i in range(max(0, len(embeddings) - 1))]
 
 def extract_keywords(segments: list[TranscriptSegment | dict[str, Any]], max_keywords: int = 10) -> list[str]:
-    """Rank terms by frequency × inverse segment frequency after filler filtering."""
+    """Use KeyBERT phrase scores; preserve the old IDF signal as outage fallback."""
+    text = " ".join(
+        _value(segment, "text", "").strip()
+        for segment in segments
+        if isinstance(_value(segment, "text", ""), str)
+    )
+    phrases = extract_keyphrases(text, top_n=max_keywords)
+    if phrases:
+        return [str(item["phrase"]) for item in phrases]
     documents = [tokenize(_value(s, "text", "")) for s in segments if isinstance(_value(s, "text", ""), str)]
     documents = [doc for doc in documents if doc]
     if not documents: return []
@@ -113,6 +123,23 @@ def _format_label(label: str) -> str:
 def _topic_label(text: str, global_keywords: list[str], used_labels: set[str] | None = None) -> str | None:
     words = tokenize(text)
     if not words: return None
+    present_phrases = [phrase for phrase in global_keywords if len(phrase.split()) > 1 and all(part in text.casefold() for part in phrase.casefold().split())]
+    if present_phrases:
+        # Prefer conceptual phrases (noun + noun/adjective) over action phrases (verb + object).
+        # Count occurrences and prefer more frequent, multi-word technical terms.
+        text_lower = text.casefold()
+        phrase_scores = []
+        for phrase in present_phrases:
+            count = text_lower.count(phrase.casefold())
+            # Score based on phrase length (longer = more specific) and frequency
+            word_count = len(phrase.split())
+            score = (word_count * 2) + count  # Prefer longer phrases first, then by frequency
+            phrase_scores.append((phrase, score))
+        # Sort by score descending
+        for phrase, _ in sorted(phrase_scores, key=lambda x: -x[1]):
+            label = _format_label(phrase)
+            if not used_labels or label.casefold() not in {item.casefold() for item in used_labels}:
+                return label
     global_rank = {word: i for i, word in enumerate(global_keywords)}
     phrases = Counter(_phrase_candidates(text))
     # Prefer repeated phrases, then phrases whose terms are globally salient.
@@ -140,7 +167,7 @@ def _topic_label(text: str, global_keywords: list[str], used_labels: set[str] | 
         label = _format_label(word)
         if label.lower() not in GENERIC_WORDS:
             if not used_labels or label not in used_labels: return label
-    return None
+    return "General Discussion"
 
 def _boundary_cutoff(similarities: list[float], configured_threshold: float) -> float:
     if not similarities: return configured_threshold
@@ -256,11 +283,14 @@ def _build_title(text: str, keywords: list[str]) -> str:
 def _importance(text: str, topic: TopicRegion, keywords: list[str]) -> float:
     words = tokenize(text)
     if not words: return 0.0
-    keyword_coverage = len(set(words) & set(keywords)) / min(len(set(words)), max(1, len(keywords)))
+    content_terms = set(words)
+    keyword_terms = {token for phrase in keywords for token in tokenize(phrase)}
+    keyword_coverage = len(content_terms & keyword_terms) / min(len(content_terms), max(1, len(keyword_terms)))
     richness = min(1.0, len(words) / 28.0)
     topic_words = set(tokenize(" ".join(chunk.text for chunk in topic.chunks)))
     topic_relevance = len(set(words) & topic_words) / len(set(words))
-    # 0-1: 45% salient corpus terms, 30% substantive content, 25% topic fit.
+    # 0-1 heuristic relevance: 45% KeyBERT/keyphrase fit, 30% information
+    # density and 25% topic fit. Position is handled by topic-diverse selection.
     return round(min(1.0, 0.45 * keyword_coverage + 0.30 * richness + 0.25 * topic_relevance), 3)
 
 
@@ -337,6 +367,48 @@ def _expand_to_sentence_boundaries(chunks: list[TranscriptChunk], index: int, ma
             break
     return start, end, " ".join(c.text.strip() for c in chunks[start:end + 1])
 
+
+def _expand_candidate(chunks: list[TranscriptChunk], index: int) -> tuple[int, int, str]:
+    """Build a 6-35 second contextual window using only source segment times."""
+    minimum = max(1.0, float(os.getenv("KEY_MOMENT_MIN_SECONDS", "6")))
+    maximum = max(minimum, float(os.getenv("KEY_MOMENT_MAX_SECONDS", "35")))
+    start, end, text = _expand_to_sentence_boundaries(chunks, index, max_lookaround=2)
+    while chunks[end].end_time - chunks[start].start_time < minimum or len(tokenize(text)) < 4:
+        options = []
+        if start > 0:
+            options.append((start - 1, end))
+        if end + 1 < len(chunks):
+            options.append((start, end + 1))
+        options = [span for span in options if chunks[span[1]].end_time - chunks[span[0]].start_time <= maximum]
+        if not options:
+            break
+        # Prefer the adjacent segment carrying the most new content words.
+        def added_content(span):
+            included = set(tokenize(" ".join(c.text for c in chunks[start:end + 1])))
+            candidate_text = " ".join(c.text for c in chunks[span[0]:span[1] + 1])
+            return len(set(tokenize(candidate_text)) - included)
+        start, end = max(options, key=added_content)
+        text = " ".join(c.text.strip() for c in chunks[start:end + 1])
+    return start, end, text
+
+
+def _select_topic_diverse(candidates: list[KeyMoment], limit: int) -> list[KeyMoment]:
+    """Round-robin ranked candidates by topic before filling remaining slots."""
+    ranked = sorted(candidates, key=lambda item: (-item.importance_score, item.start_time))
+    groups: dict[str, list[KeyMoment]] = {}
+    for item in ranked:
+        groups.setdefault((item.topic or "General Discussion").casefold(), []).append(item)
+    selected: list[KeyMoment] = []
+    while len(selected) < limit and groups:
+        for topic in list(groups):
+            if groups[topic]:
+                selected.append(groups[topic].pop(0))
+                if len(selected) >= limit:
+                    break
+            if not groups[topic]:
+                del groups[topic]
+    return selected
+
 def detect_key_moments(segments: list[TranscriptSegment | dict[str, Any]], threshold: float = 0.30, max_moments: int = 10) -> list[KeyMoment]:
     chunks = segment_transcript(segments)
     if not chunks or max_moments <= 0: return []
@@ -354,23 +426,27 @@ def detect_key_moments(segments: list[TranscriptSegment | dict[str, Any]], thres
         # Deterministic text fallback only: no fake/mock embeddings are created.
         regions = [TopicRegion(_topic_label(" ".join(c.text for c in chunks), keywords), chunks[0].start_time, chunks[-1].end_time, chunks)]
     for region in regions:
-        regional = [KeyMoment(c.start_time, c.end_time, _build_title(c.text, keywords), region.label, _importance(c.text, region, keywords), c.text) for c in region.chunks]
+        regional = []
+        for index, chunk in enumerate(region.chunks):
+            start_index, end_index, text = _expand_candidate(region.chunks, index)
+            content_words = tokenize(text)
+            if len(content_words) < 4 or len(set(content_words)) < 3:
+                continue
+            span = region.chunks[start_index:end_index + 1]
+            duration = span[-1].end_time - span[0].start_time
+            maximum = max(float(os.getenv("KEY_MOMENT_MIN_SECONDS", "6")), float(os.getenv("KEY_MOMENT_MAX_SECONDS", "35")))
+            if duration > maximum:
+                continue
+            regional.append(KeyMoment(span[0].start_time, span[-1].end_time, _build_title(text, keywords), region.label or "General Discussion", _importance(text, region, keywords), text))
         regional = [item for item in regional if item.importance_score >= threshold]
-        if regional: candidates.append(sorted(regional, key=lambda item: (-item.importance_score, item.start_time))[0])
-    expanded: list[KeyMoment] = []
-    for moment in remove_overlaps(candidates):
-        region = next((r for r in regions if r.start_time <= moment.start_time < r.end_time), None)
-        if region is None:
-            expanded.append(moment)
-            continue
-        index = next((i for i, c in enumerate(region.chunks) if c.start_time == moment.start_time), None)
-        if index is None:
-            expanded.append(moment)
-            continue
-        start, end, text = _expand_to_sentence_boundaries(region.chunks, index)
-        span = region.chunks[start:end + 1]
-        expanded.append(KeyMoment(span[0].start_time, span[-1].end_time, _build_title(text, keywords), region.label, _importance(text, region, keywords), text))
-    ranked = sorted(expanded, key=lambda item: (-item.importance_score, item.start_time, item.end_time))[:max_moments]
+        if regional:
+            # For small, continuous regions, limit to 1-2 candidates.
+            # Larger regions get up to 3 candidates for diversity.
+            # This prevents fragmenting short topics into many near-identical moments.
+            max_per_region = 1 if len(region.chunks) <= 2 else (2 if len(region.chunks) <= 4 else 3)
+            candidates.extend(sorted(regional, key=lambda item: (-item.importance_score, item.start_time))[:max_per_region])
+    expanded = remove_overlaps(candidates, overlap_threshold=0.35)
+    ranked = _select_topic_diverse(expanded, max_moments)
     return sorted(ranked, key=lambda item: item.start_time)
 
 def segment_topics(segments: list[TranscriptSegment | dict[str, Any]]) -> list[dict[str, Any]]:

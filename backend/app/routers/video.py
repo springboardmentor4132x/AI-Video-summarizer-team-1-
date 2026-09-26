@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,7 +21,7 @@ from app.schemas.user import UserRole
 from app.models.summary import Summary, SummaryStatus
 from app.models.transcript import Transcript, TranscriptStatus
 from app.models.video import Video
-from app.schemas.video import VideoResponse, VideoStatusResponse
+from app.schemas.video import OwnedVideoResponse, VideoPipelineStatusResponse, VideoResponse, VideoStatusResponse
 from app.services.ffmpeg_service import extract_audio, process_video
 from app.services.highlight_service import extract_highlights_for_key_moments
 from app.services.key_moment_service import detect_key_moments, save_key_moments
@@ -344,7 +345,7 @@ async def upload_video(
     return video
 
 
-@router.get("/", response_model=list[VideoResponse])
+@router.get("/", response_model=list[OwnedVideoResponse])
 def list_videos(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
@@ -358,21 +359,43 @@ def list_videos(
     )
 
 
-@router.get("/status", response_model=list[VideoResponse])
+@router.get("/status", response_model=list[VideoPipelineStatusResponse])
 def list_video_statuses(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Return processing status records for the authenticated user's videos."""
-    return (
+    videos = (
         db.query(Video)
         .filter(Video.user_id == current_user.id)
         .order_by(Video.uploaded_at.desc())
         .all()
     )
+    statuses = []
+    for video in videos:
+        transcript = video.transcript
+        summary = transcript.summary if transcript else None
+        video_status = str(video.status).upper()
+        key_moments_status = (
+            "FAILED" if video_status == "FAILED"
+            else "COMPLETED" if video_status == "COMPLETED"
+            else "PROCESSING" if video_status in {"PROCESSING", "VALIDATING", "FFMPEG_PROCESSING", "AI_PROCESSING"}
+            else "NOT_STARTED"
+        )
+        statuses.append({
+            "id": video.id,
+            "filename": video.filename,
+            "status": video.status,
+            "uploaded_at": video.uploaded_at,
+            "transcript_status": transcript.status.value.upper() if transcript else "NOT_STARTED",
+            "summary_status": summary.status.value.upper() if summary else "NOT_STARTED",
+            "key_moments_status": key_moments_status,
+            "key_moment_count": len(video.key_moments or []),
+        })
+    return statuses
 
 
-@router.get("/history", response_model=list[VideoResponse])
+@router.get("/history", response_model=list[OwnedVideoResponse])
 def list_upload_history(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
@@ -422,4 +445,52 @@ def get_video_media(
     video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
     if video is None or not Path(video.file_path).is_file():
         raise HTTPException(status_code=404, detail="Video file not found")
-    return FileResponse(video.file_path, media_type="video/mp4", filename=video.filename)
+    media_type = mimetypes.guess_type(video.filename)[0] or "application/octet-stream"
+    return FileResponse(video.file_path, media_type=media_type, filename=video.filename)
+
+
+@router.get("/{video_id}/media")
+def get_owned_video_media(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Serve a video by ID, scoped to the authenticated owner."""
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None or not Path(video.file_path).is_file():
+        raise HTTPException(status_code=404, detail="Video file not found")
+    media_type = mimetypes.guess_type(video.filename)[0] or "application/octet-stream"
+    return FileResponse(video.file_path, media_type=media_type, filename=video.filename)
+
+
+@router.delete("/{video_id}")
+def delete_owned_video(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Delete an owned video and its associated transcript, summary, and moments."""
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    managed_root = UPLOAD_DIR.resolve()
+    paths_to_remove = [Path(video.file_path)]
+    paths_to_remove.extend(Path(moment.highlight_path) for moment in video.key_moments if moment.highlight_path)
+    try:
+        db.delete(video)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Unable to delete video_id=%s", video_id)
+        raise HTTPException(status_code=500, detail="Video could not be deleted.") from exc
+
+    for candidate in paths_to_remove:
+        try:
+            resolved = candidate.resolve()
+            if resolved != managed_root and managed_root in resolved.parents:
+                remove_file(resolved)
+        except OSError:
+            logger.warning("Unable to remove managed video artifact for video_id=%s", video_id)
+
+    return {"message": "Video and associated data deleted successfully.", "video_id": str(video_id)}

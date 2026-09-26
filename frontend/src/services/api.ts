@@ -5,7 +5,7 @@ export interface VideoUploadResponse {
   id: string;
   filename: string;
   mime_type: string;
-  file_size_bytes: number;
+  file_size_bytes: number | null;
   processing_status: string;
   source_type?: "UPLOAD" | "YOUTUBE";
   source_url?: string | null;
@@ -29,7 +29,7 @@ export interface UploadHistoryEvent {
   timestamp: string;
   notes: string | null;
   mime_type: string;
-  file_size_bytes: number;
+  file_size_bytes: number | null;
   duration_seconds: number | null;
   source_type: "UPLOAD" | "YOUTUBE";
 }
@@ -38,15 +38,19 @@ export interface VideoStatus {
   id: string;
   filename: string;
   processing_status: string;
-  updated_at: string;
+  uploaded_at: string;
   latest_note: string | null;
+  transcript_status: string;
+  summary_status: string;
+  key_moments_status: string;
+  key_moment_count: number;
 }
 
 export interface VideoListItem {
   id: string;
   filename: string;
   mime_type: string;
-  file_size_bytes: number;
+  file_size_bytes: number | null;
   duration_seconds: number | null;
   processing_status: string;
   source_type?: "UPLOAD" | "YOUTUBE";
@@ -55,6 +59,45 @@ export interface VideoListItem {
   owner_id: string;
   owner_name: string;
   storage_key?: string | null;
+}
+
+interface BackendVideo {
+  id: number;
+  user_id?: number;
+  filename: string;
+  status: string;
+  uploaded_at: string;
+}
+
+interface BackendVideoPipelineStatus extends BackendVideo {
+  transcript_status: string;
+  summary_status: string;
+  key_moments_status: string;
+  key_moment_count: number;
+}
+
+function videoMimeType(filename: string) {
+  const extension = filename.split(".").pop()?.toLowerCase();
+  const types: Record<string, string> = {
+    mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mov: "video/quicktime",
+    mkv: "video/x-matroska", avi: "video/x-msvideo",
+  };
+  return types[extension ?? ""] ?? "application/octet-stream";
+}
+
+function toVideoListItem(video: BackendVideo): VideoListItem {
+  return {
+    id: String(video.id),
+    filename: video.filename,
+    mime_type: videoMimeType(video.filename),
+    file_size_bytes: null,
+    duration_seconds: null,
+    processing_status: video.status.toUpperCase(),
+    source_type: "UPLOAD",
+    uploaded_at: video.uploaded_at,
+    owner_id: video.user_id === undefined ? "" : String(video.user_id),
+    owner_name: "You",
+  };
 }
 
 export interface TranscriptSegment {
@@ -75,6 +118,23 @@ export interface Transcript {
   updated_at: string;
 }
 
+interface BackendTranscript extends Omit<Transcript, "segments" | "error_message"> {
+  segments: Array<TranscriptSegment | { start: number; end: number; text: string }>;
+  error_message?: string | null;
+}
+
+function normalizeTranscript(transcript: BackendTranscript): Transcript {
+  return {
+    ...transcript,
+    error_message: transcript.error_message ?? null,
+    segments: transcript.segments.map(segment => ({
+      start_time: "start_time" in segment ? segment.start_time : segment.start,
+      end_time: "end_time" in segment ? segment.end_time : segment.end,
+      text: segment.text,
+    })),
+  };
+}
+
 export interface Summary {
   id: string;
   video_id: string;
@@ -90,6 +150,35 @@ export interface Summary {
   error_message: string | null;
   created_at: string;
   updated_at: string;
+}
+
+type BackendSummary = {
+  id: number;
+  transcript_id: number;
+  short_summary: string | null;
+  detailed_summary: string | null;
+  status: Summary["status"];
+  created_at: string;
+  updated_at: string | null;
+};
+
+function normalizeSummary(summary: BackendSummary, videoId: string | number): Summary {
+  return {
+    id: String(summary.id),
+    video_id: String(videoId),
+    transcript_id: summary.transcript_id,
+    content: summary.detailed_summary ?? summary.short_summary ?? "",
+    overview: summary.short_summary ?? summary.detailed_summary ?? "",
+    short_summary: summary.short_summary,
+    detailed_summary: summary.detailed_summary,
+    main_points: [],
+    key_takeaways: [],
+    duration_seconds: null,
+    status: summary.status,
+    error_message: null,
+    created_at: summary.created_at,
+    updated_at: summary.updated_at ?? summary.created_at,
+  };
 }
 
 export interface KeyMoment {
@@ -304,20 +393,9 @@ const API_URL = API_BASE_URL;
 const INVALID_TOKEN_VALUES = new Set(["", "undefined", "null"]);
 export const AUTH_EXPIRED_EVENT = "clipmind:auth-expired";
 
-export function getVideoMediaUrl(videoId: string, userId: string, filename: string, storageKey?: string | null) {
-  if (storageKey && storageKey.trim()) {
-    return `${API_URL}/media/${encodeURI(storageKey.trim())}`;
-  }
-
-  const extension = filename.includes(".") ? filename.slice(filename.lastIndexOf(".")) : "";
-  const safeFilename = filename.trim() || `${videoId}${extension || ".mp4"}`;
-  const suffix = safeFilename.includes(".") ? safeFilename.slice(safeFilename.lastIndexOf(".")) : extension || ".mp4";
-  return `${API_URL}/media/videos/${userId}/${videoId}${suffix}`;
-}
-
-export async function getVideoMediaBlobUrl(token: string, videoId: string, userId?: string | number) {
+export async function getVideoMediaBlobUrl(token: string, videoId: string) {
   ensureValidAuthorization(token);
-  const response = await fetch(`${API_URL}/videos/media/videos/${userId ?? ""}/${videoId}`, {
+  const response = await fetch(`${API_URL}/videos/${videoId}/media`, {
     headers: getAuthHeaders(token),
   });
   if (!response.ok) {
@@ -328,7 +406,8 @@ export async function getVideoMediaBlobUrl(token: string, videoId: string, userI
 }
 
 export function getVideoMediaObjectUrl(token: string, videoId: string | number, userId: string | number, _filename: string) {
-  return getVideoMediaBlobUrl(token, String(videoId), userId);
+  void userId;
+  return getVideoMediaBlobUrl(token, String(videoId));
 }
 
 export function getAuthHeaders(token?: string | null): Record<string, string> {
@@ -474,11 +553,11 @@ export function uploadVideo(token: string, file: File) {
   ensureValidAuthorization(token);
   const body = new FormData();
   body.append("file", file);
-  return request<VideoUploadResponse>("/videos/upload", {
+  return request<BackendVideo>("/videos/upload", {
     method: "POST",
     headers: getAuthHeaders(token),
     body,
-  });
+  }).then(video => ({ ...toVideoListItem(video), file_size_bytes: file.size }));
 }
 
 export function processYouTubeVideo(token: string, youtubeUrl: string) {
@@ -492,25 +571,53 @@ export function processYouTubeVideo(token: string, youtubeUrl: string) {
 
 export function getUploadHistory(token: string, administrator = false) {
   ensureValidAuthorization(token);
-  return request<UploadHistoryEvent[]>(administrator ? "/admin/upload-history" : "/videos/history", {
+  if (administrator) {
+    return request<UploadHistoryEvent[]>("/admin/upload-history", {
+      headers: getAuthHeaders(token),
+    });
+  }
+  return request<BackendVideo[]>("/videos/history", {
     headers: getAuthHeaders(token),
-  });
+  }).then(videos => videos.map(video => ({
+    id: String(video.id),
+    video_id: String(video.id),
+    filename: video.filename,
+    owner_id: String(video.user_id),
+    owner_name: "You",
+    status: video.status.toUpperCase(),
+    timestamp: video.uploaded_at,
+    notes: null,
+    mime_type: videoMimeType(video.filename),
+    file_size_bytes: null,
+    duration_seconds: null,
+    source_type: "UPLOAD" as const,
+  })));
 }
 
 export function getVideoStatuses(token: string, limit = 500) {
   ensureValidAuthorization(token);
-  const params = new URLSearchParams({ limit: String(limit) });
-  return request<VideoStatus[]>(`/videos/status?${params.toString()}`, {
+  void limit;
+  return request<BackendVideoPipelineStatus[]>("/videos/status", {
     headers: getAuthHeaders(token),
-  });
+  }).then(videos => videos.map(video => ({
+    id: String(video.id),
+    filename: video.filename,
+    processing_status: video.status.toUpperCase(),
+    uploaded_at: video.uploaded_at,
+    latest_note: null,
+    transcript_status: video.transcript_status,
+    summary_status: video.summary_status,
+    key_moments_status: video.key_moments_status,
+    key_moment_count: video.key_moment_count,
+  })));
 }
 
 export function getVideos(token: string, limit = 500) {
   ensureValidAuthorization(token);
-  const params = new URLSearchParams({ limit: String(limit) });
-  return request<VideoListItem[]>(`/videos/?${params.toString()}`, {
+  void limit;
+  return request<BackendVideo[]>("/videos/", {
     headers: getAuthHeaders(token),
-  });
+  }).then(videos => videos.map(toVideoListItem));
 }
 
 export function deleteVideo(token: string, videoId: string | number) {
@@ -523,50 +630,50 @@ export function deleteVideo(token: string, videoId: string | number) {
 
 export function getTranscript(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
-  return request<Transcript>(`/videos/${videoId}/transcript`, {
+  return request<BackendTranscript>(`/videos/${videoId}/transcript`, {
     headers: getAuthHeaders(token),
-  });
+  }).then(normalizeTranscript);
 }
 
 export function generateTranscript(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
-  return request<Transcript>(`/videos/${videoId}/transcript`, {
+  return request<BackendTranscript>(`/videos/${videoId}/transcript`, {
     method: "POST",
     headers: getAuthHeaders(token),
-  });
+  }).then(normalizeTranscript);
 }
 
 export function updateTranscript(token: string, videoId: string | number, text: string) {
   ensureValidAuthorization(token);
-  return request<Transcript>(`/videos/${videoId}/transcript`, {
+  return request<BackendTranscript>(`/videos/${videoId}/transcript`, {
     method: "PATCH",
     headers: getAuthHeaders(token),
     body: JSON.stringify({ text }),
-  });
+  }).then(normalizeTranscript);
 }
 
 export function getSummary(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
-  return request<Summary>(`/videos/${videoId}/summary`, {
+  return request<BackendSummary>(`/videos/${videoId}/summary`, {
     headers: getAuthHeaders(token),
-  });
+  }).then(summary => normalizeSummary(summary, videoId));
 }
 
 export function generateSummary(token: string, videoId: string | number, regenerate = false) {
   ensureValidAuthorization(token);
-  const query = regenerate ? "?regenerate=true" : "";
-  return request<Summary>(`/videos/${videoId}/summary${query}`, {
+  const path = regenerate ? `/videos/${videoId}/summary/regenerate` : `/videos/${videoId}/summary`;
+  return request<BackendSummary>(path, {
     method: "POST",
     headers: getAuthHeaders(token),
-  });
+  }).then(summary => normalizeSummary(summary, videoId));
 }
 
 export function retrySummary(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
-  return request<Summary>(`/videos/${videoId}/summary/retry`, {
+  return request<BackendSummary>(`/videos/${videoId}/summary/regenerate`, {
     method: "POST",
     headers: getAuthHeaders(token),
-  });
+  }).then(summary => normalizeSummary(summary, videoId));
 }
 
 export function getKeyMoments(token: string, videoId: string | number) {
@@ -604,5 +711,25 @@ export async function downloadTranscript(token: string, videoId: string | number
     }
     throw new ApiError(response.status, message);
   }
-  return response.blob();
+  return new Blob([await response.arrayBuffer()], {
+    type: response.headers.get("Content-Type") || "text/plain;charset=utf-8",
+  });
+}
+
+export async function downloadSummary(token: string, videoId: string | number) {
+  ensureValidAuthorization(token);
+  const response = await fetch(withApiBase(`/videos/${videoId}/summary/download`), {
+    headers: getAuthHeaders(token),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const message = body.detail ?? "Summary download failed";
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiError(response.status, "Your session has expired. Please log in again.");
+    }
+    throw new ApiError(response.status, message);
+  }
+  return new Blob([await response.arrayBuffer()], {
+    type: response.headers.get("Content-Type") || "text/plain;charset=utf-8",
+  });
 }

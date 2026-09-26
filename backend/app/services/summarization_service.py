@@ -288,13 +288,26 @@ def _validate_summary_quality(source: str, short_summary: str, detailed_summary:
     """Reject obviously incomplete, copied, or hallucinated output, while scaling expectations for short videos."""
     if not short_summary.strip() or not detailed_summary.strip():
         raise SummarizationError("The model returned an empty summary")
-    
     words = len(source.split())
-    if words < 120:
-        # Very short transcripts don't need minimum length checks
-        return
-    
     metrics = _quality_metrics(source, short_summary, detailed_summary)
+    if words >= 5 and (metrics["short_words"] >= words or metrics["detailed_words"] >= words):
+        raise SummarizationError("The model output is not shorter than its source transcript")
+    # The copying threshold scales down for short clips; proper nouns and short
+    # technical expressions are permitted, but copied sentences are not.
+    copy_limit = min(14, max(6, words // 3))
+    if metrics["longest_shared_phrase_words"] >= copy_limit or metrics["extractive"]:
+        raise SummarizationError(
+            "The model output is too extractive to present as a synthesized summary "
+            f"(longest shared phrase: {metrics['longest_shared_phrase_words']} words)."
+        )
+    summary_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", f"{short_summary} {detailed_summary}".casefold())
+    filler_tokens = {"hello", "welcome", "today", "okay", "yeah", "right", "um", "uh", "basically", "so"}
+    if summary_tokens and sum(token in filler_tokens for token in summary_tokens) / len(summary_tokens) > 0.35:
+        raise SummarizationError("The model output contains too much presenter filler")
+    if words < 120:
+        # Short clips skip the long-source minimum/coverage thresholds, but
+        # still must be compressed, non-empty, and not mostly copied/filler.
+        return
     
     # Minimum length checks (scaled by transcript length). Floors catch truly degenerate (single-sentence)
     # outputs while leaving room for the model to do its work on dense news
@@ -313,22 +326,6 @@ def _validate_summary_quality(source: str, short_summary: str, detailed_summary:
     if metrics["detailed_words"] < detailed_minimum:
         raise SummarizationError(
             f"The model returned an undersized detailed summary ({metrics['detailed_words']} words; minimum {detailed_minimum})."
-        )
-    
-    # Anti-copying check: a phrase of 40+ consecutive source words signals
-    # near-verbatim extraction rather than synthesis. Preserve the existing gate.
-    if metrics["longest_shared_phrase_words"] >= 40:
-        raise SummarizationError(
-            f"The model output is too extractive ({metrics['longest_shared_phrase_words']} consecutive words copied)."
-        )
-    
-    # Anti-hallucination check: extractive flag is set when longest_shared_phrase>=14
-    # OR >55% of sentences are exact copies.  Only raise here for the sentence
-    # copy case (phrase case is already guarded above at >=30).
-    if metrics["extractive"] and metrics["longest_shared_phrase_words"] < 40:
-        raise SummarizationError(
-            "The model output is too extractive to present as a synthesized summary "
-            f"(longest shared phrase: {metrics['longest_shared_phrase_words']} words)."
         )
     
     # Topic coverage check: ensure the summary addresses main topics from the source
@@ -560,20 +557,40 @@ def _summarize_with_hf(
         raise SummarizationError(f"AI summary generation failed during {stage} using {model_name}") from exc
 
 
+def summarize_text(text: str, *, video_id: int | None = None, transcript_id: int | None = None) -> SummaryResult:
+    """Run the same local hierarchical BART pipeline for supplied source text."""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Transcript content is required for summarization")
+    result = _summarize_with_hf(text, video_id=video_id, transcript_id=transcript_id)
+    logger.info(
+        "Summary completed video_id=%s transcript_id=%s transcript_chars=%s chunks=%s elapsed_seconds=%.3f model=%s",
+        video_id, transcript_id, len(text), result.chunk_count,
+        result.generation_seconds, os.getenv("LOCAL_SUMMARY_MODEL", _DEFAULT_MODEL),
+    )
+    return result
+
+
 def summarize_transcript(transcript: Transcript) -> SummaryResult:
     """Summarize only the selected completed transcript and record safe diagnostics."""
     if transcript.status != TranscriptStatus.COMPLETED:
         raise ValueError("Only completed transcripts can be summarized")
     text = (transcript.text or "").strip()
+    # Prefer the stored Whisper segments so Module 2 consumes the same ordered,
+    # timestamped source that Module 3 and transcript seeking use. Timestamps
+    # are intentionally not rendered into BART's language input.
+    segments = transcript.segments or []
+    segment_texts = [
+        segment.get("text", "").strip()
+        for segment in segments
+        if isinstance(segment, dict) and isinstance(segment.get("text"), str)
+        and segment.get("text", "").strip()
+    ]
+    if segment_texts:
+        text = " ".join(segment_texts)
     if not text:
         raise ValueError("A completed transcript must contain text")
-    result = _summarize_with_hf(text, video_id=transcript.video_id, transcript_id=transcript.id)
-    logger.info(
-        "Summary completed video_id=%s transcript_id=%s transcript_chars=%s chunks=%s elapsed_seconds=%.3f model=%s",
-        transcript.video_id, transcript.id, len(text), result.chunk_count,
-        result.generation_seconds, os.getenv("LOCAL_SUMMARY_MODEL", _DEFAULT_MODEL),
-    )
-    return result
+    return summarize_text(text, video_id=transcript.video_id, transcript_id=transcript.id)
 
 
 

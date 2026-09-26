@@ -32,8 +32,6 @@ class Transcript(Base):
     text = Column(Text, nullable=True)
     language = Column(String(10), nullable=True)
     segments = Column(JSON, nullable=True, default=list)
-    error_message = Column(Text, nullable=True)
-
     status = Column(
         Enum(TranscriptStatus),
         default=TranscriptStatus.PENDING,

@@ -1,16 +1,15 @@
+"""Compatibility entry point for local BART summarization.
+
+All callers share the token-safe hierarchical implementation in
+``summarization_service``; this module deliberately contains no extractive
+first-sentence fallback.
+"""
+
+from app.services.summarization_service import summarize_text
+
+
 def generate_summary_from_transcript(transcript_text: str) -> str:
+    """Return the abstractive short summary for actual transcript content."""
     if not transcript_text or not transcript_text.strip():
-        return "No transcript content was available for summarization."
-
-    sentences = [s.strip() for s in transcript_text.replace("\n", " ").split(". ") if s.strip()]
-    if not sentences:
-        return transcript_text.strip()
-
-    selected = []
-    for sentence in sentences[:3]:
-        selected.append(sentence.rstrip("."))
-
-    summary = " ".join(selected)
-    if len(summary) > 900:
-        summary = summary[:897].rstrip() + "..."
-    return summary
+        raise ValueError("Transcript content is required for summarization")
+    return summarize_text(transcript_text).short_summary

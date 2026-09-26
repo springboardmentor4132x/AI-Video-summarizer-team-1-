@@ -12,6 +12,7 @@ from app.models.summary import Summary
 from app.models.transcript import Transcript
 from app.models.user import User
 from app.models.video import Video
+from app.services.keyword_extraction_service import extract_keyphrases
 from app.schemas.analytics import (
     ActivityItem,
     AIInsight,
@@ -70,10 +71,10 @@ def _word_count(text: str | None) -> int:
 def _keywords(texts: list[str]) -> list[KeywordItem]:
     counts = Counter()
     for text in texts:
-        for word in re.findall(r"\b\w+(?:['’-]\w+)*\b", text.casefold(), flags=re.UNICODE):
-            if len(word) < 3 or word.isnumeric() or word in STOP_WORDS:
-                continue
-            counts[word] += 1
+        # Count each semantic phrase once per transcript, making frequency a
+        # corpus-document count rather than a fabricated popularity metric.
+        phrases = extract_keyphrases(text, top_n=10)
+        counts.update({str(row["phrase"]).casefold(): 1 for row in phrases})
     return [
         KeywordItem(keyword=word, count=count, frequency=count, rank=index)
         for index, (word, count) in enumerate(counts.most_common(10), start=1)
@@ -279,9 +280,10 @@ def build_dashboard(db: Session, user_id: int | None = None, date_from: date | N
     topic_summary_counts = Counter()
     for transcript in transcript_rows:
         vid = str(transcript.video_id)
-        for token in _tokens(transcript.text):
-            keyword_counts[token] += 1
-            keyword_video_ids.setdefault(token, set()).add(vid)
+        for row in extract_keyphrases(transcript.text or "", top_n=10):
+            phrase = str(row["phrase"]).casefold()
+            keyword_counts[phrase] += 1
+            keyword_video_ids.setdefault(phrase, set()).add(vid)
     for moment in moment_rows:
         if moment.topic:
             topic = moment.topic.casefold().strip()
@@ -289,8 +291,8 @@ def build_dashboard(db: Session, user_id: int | None = None, date_from: date | N
                 topic_moment_counts[topic] += 1
                 keyword_video_ids.setdefault(topic, set()).add(str(moment.video_id))
     for summary in summary_rows:
-        for token in _tokens(_summary_text(summary)):
-            topic_summary_counts[token] += 1
+        for row in extract_keyphrases(_summary_text(summary), top_n=10):
+            topic_summary_counts[str(row["phrase"]).casefold()] += 1
 
     keyword_total = sum(keyword_counts.values())
     keyword_intelligence = [

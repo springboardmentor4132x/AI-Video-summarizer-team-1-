@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 import logging
 from sqlalchemy.orm import Session
 
@@ -34,6 +35,34 @@ def _get_summary(video_id: int, db: Session, current_user) -> Summary:
 @router.get("/videos/{video_id}/summary", response_model=SummaryResponse)
 def get_summary(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     return _get_summary(video_id, db, current_user)
+
+
+@router.get("/videos/{video_id}/summary/download")
+def download_video_summary(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Download a completed summary for a video owned by the caller."""
+    summary = _get_summary(video_id, db, current_user)
+    if summary.status != SummaryStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail="Summary is not yet available for download.")
+    if not (summary.short_summary or summary.detailed_summary):
+        raise HTTPException(status_code=409, detail="Summary content is empty and cannot be downloaded.")
+    video = _get_owned_video(video_id, db, current_user)
+    lines = [f"Video: {video.filename}", ""]
+    if summary.short_summary:
+        lines.extend(["Short Summary", "", summary.short_summary.strip(), ""])
+    if summary.detailed_summary:
+        lines.extend(["Detailed Summary", "", summary.detailed_summary.strip(), ""])
+    generated_at = summary.updated_at or summary.created_at
+    if generated_at:
+        lines.extend([f"Generated: {generated_at.isoformat()}", ""])
+    return Response(
+        content="\n".join(lines).encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="summary.txt"'},
+    )
 
 
 def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool = False) -> Summary:

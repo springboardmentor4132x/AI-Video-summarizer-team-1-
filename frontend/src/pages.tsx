@@ -4,7 +4,7 @@ import { Activity, ArrowUpRight, BookOpen, CalendarDays, Clapperboard, Clock3, F
 import { withApiBase } from "./config";
 import { Modal } from "./components/Modal";
 import { useAuth } from "./features/auth/AuthContext";
-import { ApiError, checkPermission, deleteVideo, downloadTranscript, generateKeyMoments, generateSummary, generateTranscript, getAdminAnalytics, getCreatorAnalytics, getExpectedMcqs, getKeyMoments, getSummary, getTranscript, getUploadHistory, getVideoMediaBlobUrl, getVideoStatuses, getVideos, getVideoMediaUrl, processYouTubeVideo, register as registerRequest, retrySummary, uploadVideo, type AnalyticsDashboard, type AnalyticsRange, type AnalyticsRecentVideo, type KeyMoment, type McqQuestion, type Summary, type Transcript, type UploadHistoryEvent, type VideoListItem, type VideoStatus } from "./services/api";
+import { ApiError, checkPermission, deleteVideo, downloadSummary, downloadTranscript, generateKeyMoments, generateSummary, generateTranscript, getAdminAnalytics, getCreatorAnalytics, getExpectedMcqs, getKeyMoments, getSummary, getTranscript, getUploadHistory, getVideoMediaBlobUrl, getVideoStatuses, getVideos, processYouTubeVideo, register as registerRequest, retrySummary, uploadVideo, type AnalyticsDashboard, type AnalyticsRange, type AnalyticsRecentVideo, type KeyMoment, type McqQuestion, type Summary, type Transcript, type UploadHistoryEvent, type VideoListItem, type VideoStatus } from "./services/api";
 import type { Role } from "./types/auth";
 
 const dashboardConfig: Record<Role, { kicker: string; title: string; description: string; accent: string; actions: { label: string; detail: string; icon: typeof Video; route: string; endpoint?: string }[] }> = {
@@ -71,7 +71,8 @@ function formatClock(seconds: number) {
   return `${minutes.toString().padStart(2, "0")}:${remainder}`;
 }
 
-function formatFileSize(bytes: number) {
+function formatFileSize(bytes: number | null) {
+  if (bytes === null) return "Not available";
   if (!bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
   const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
@@ -116,6 +117,17 @@ function Dashboard() {
         setStatsError(null);
         if (user.role === "Administrator") {
           const analytics = await getAdminAnalytics(token);
+          setStats({
+            videos: analytics.overview.total_videos,
+            transcripts: analytics.overview.total_transcripts,
+            summaries: analytics.overview.total_summaries,
+            keyMoments: analytics.overview.total_key_moments,
+          });
+          return;
+        }
+
+        if (user.role === "Content Creator") {
+          const analytics = await getCreatorAnalytics(token);
           setStats({
             videos: analytics.overview.total_videos,
             transcripts: analytics.overview.total_transcripts,
@@ -630,10 +642,11 @@ export function VideoUploadPage() {
             <button type="button" className={inputMode === "upload" ? "primary-button" : "secondary-button"} onClick={() => setInputMode("upload")} style={{ flex: 1 }}>
               Upload Video
             </button>
-            <button type="button" className={inputMode === "youtube" ? "primary-button" : "secondary-button"} onClick={() => setInputMode("youtube")} style={{ flex: 1 }}>
-              YouTube URL
+            <button type="button" className="secondary-button" disabled aria-describedby="youtube-unavailable" style={{ flex: 1 }}>
+              YouTube URL (unavailable)
             </button>
           </div>
+          <p id="youtube-unavailable" className="feature-description">YouTube URL processing is unavailable because the backend does not support it. Upload a video file to process it.</p>
 
           {inputMode === "upload" ? (
             <>
@@ -918,7 +931,7 @@ export function ProcessingStatusPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  return <section className="simple-page status-page"><span className="eyebrow">Creator studio</span><h1>Processing status</h1><p className="feature-description">Track the current lifecycle state of your uploaded videos. AI processing is not started by this view.</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading current statuses...</div>}{error && <div className="notice" role="alert">{error}</div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">Nothing processing</span><h2>No uploaded videos yet</h2><p>Upload a video to begin tracking its lifecycle.</p></div>}{!loading && !error && videos.length > 0 && <div className="status-list">{videos.map(video => <article className="status-card" key={video.id}><div><strong>{video.filename}</strong><small>Updated {new Date(video.updated_at).toLocaleString()}</small></div><span className={`event-status ${video.processing_status.toLowerCase()}`}>{video.processing_status}</span><p>{video.latest_note ?? "No status notes yet."}</p></article>)}</div>}</section>;
+  return <section className="simple-page status-page"><span className="eyebrow">Creator studio</span><h1>Processing status</h1><p className="feature-description">Track video processing, transcript, summary, and key moment state for each upload.</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading current statuses...</div>}{error && <div className="notice" role="alert">{error}</div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">Nothing processing</span><h2>No uploaded videos yet</h2><p>Upload a video to begin tracking its lifecycle.</p></div>}{!loading && !error && videos.length > 0 && <div className="status-list">{videos.map(video => <article className="status-card" key={video.id}><div><strong>{video.filename}</strong><small>Uploaded {new Date(video.uploaded_at).toLocaleString()}</small></div><span className={`event-status ${video.processing_status.toLowerCase()}`}>{video.processing_status}</span><p>Transcript: {video.transcript_status} · Summary: {video.summary_status} · Key moments: {video.key_moments_status} ({video.key_moment_count})</p>{[video.processing_status, video.transcript_status, video.summary_status, video.key_moments_status].includes("FAILED") && <p role="alert">A pipeline stage failed. No stage-specific error detail is stored for this video.</p>}</article>)}</div>}</section>;
 }
 
 function ResultPageHeader({ title, description, filename, backLabel = "Back to videos", backTo = "/creator/transcripts" }: { title: string; description: string; filename: string; backLabel?: string; backTo?: string; }) {
@@ -966,6 +979,31 @@ function DeleteConfirmationModal({ video, isDeleting, onConfirm, onCancel }: { v
       </div>
     </div>
   );
+}
+
+function VideoThumbnail({ video, token }: { video: VideoListItem; token: string | null }) {
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    let objectUrl: string | null = null;
+    void getVideoMediaBlobUrl(token, video.id)
+      .then(url => {
+        objectUrl = url;
+        if (active) setMediaUrl(url);
+        else URL.revokeObjectURL(url);
+      })
+      .catch(() => {
+        if (active) setMediaUrl(null);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [token, video.id]);
+
+  return <video className="video-thumb-preview" src={mediaUrl ?? undefined} muted playsInline preload="metadata" aria-label={`Play ${video.filename}`} title="Click to play" />;
 }
 
 function VideoPlayerModal({ video, token, onClose, initialTime }: { video: VideoListItem; token: string; onClose: () => void; initialTime?: number }) {
@@ -1120,7 +1158,7 @@ function SummaryModalContent({ data, onRetry, onGenerate }: { data: AnalysisCach
       {!data.loading && !data.error && !summary && <div className="analysis-state"><Sparkles size={22} /><strong>No AI summary available yet.</strong><p>Generate a summary to view it here.</p><button className="primary-button" type="button" onClick={onGenerate}>Generate summary</button></div>}
       {!data.loading && !data.error && summary && <>
         <div className="analysis-toolbar"><span className={`analysis-status ${summary.status.toLowerCase()}`}>{analysisStatus(summary.status)}</span></div>
-        {summary.status === "FAILED" ? <div className="analysis-state analysis-error" role="alert"><strong>Summary generation failed</strong><p>{summary.error_message || "The summary could not be generated."}</p><button className="secondary-button" type="button" onClick={onRetry}>Retry</button></div> : <div className="summary-modal-content"><section><span className="analysis-kicker">Overview</span><p>{summary.overview || summary.content}</p></section><section><span className="analysis-kicker">Key Takeaways</span><ul>{summary.key_takeaways.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section><section><span className="analysis-kicker">Important Points</span><ol>{summary.main_points.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ol></section></div>}
+        {summary.status === "FAILED" ? <div className="analysis-state analysis-error" role="alert"><strong>Summary generation failed</strong><p>{summary.error_message || "The summary could not be generated."}</p><button className="secondary-button" type="button" onClick={onRetry}>Retry</button></div> : <div className="summary-modal-content"><section><span className="analysis-kicker">Overview</span><p>{summary.overview || summary.content}</p></section><section><span className="analysis-kicker">Detailed summary</span><p>{summary.detailed_summary || summary.content}</p></section>{!!summary.key_takeaways.length && <section><span className="analysis-kicker">Key Takeaways</span><ul>{summary.key_takeaways.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}{!!summary.main_points.length && <section><span className="analysis-kicker">Important Points</span><ol>{summary.main_points.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ol></section>}</div>}
       </>}
     </>
   );
@@ -1264,7 +1302,7 @@ export function MCQQuizPage() {
         <div>
           <span className="eyebrow">ClipMind AI</span>
           <h1>MCQ Quiz</h1>
-          <p className="feature-description">Generate a short quiz from the transcript, summary, and key moments for a completed video.</p>
+          <p className="feature-description">Choose a completed video to review it. Quiz generation is not available because the backend does not currently provide an MCQ endpoint.</p>
         </div>
       </div>
 
@@ -1289,8 +1327,8 @@ export function MCQQuizPage() {
               <input aria-label="Number of Questions" type="number" min={1} max={10} value={questionCount} onChange={event => setQuestionCount(Math.max(1, Math.min(10, Number(event.target.value) || 1)))} style={{ padding: "0.75rem 0.9rem", borderRadius: 10, border: "1px solid #d1d5db" }} />
             </label>
 
-            <button type="button" className="primary-button" onClick={() => void handleGenerateQuiz()} disabled={loadingQuiz || !selectedVideoId}>
-              {loadingQuiz ? "Generating..." : "Generate Quiz"}
+            <button type="button" className="primary-button" onClick={() => void handleGenerateQuiz()} disabled>
+              Generate Quiz (unavailable)
             </button>
           </div>
         </div>
@@ -1688,12 +1726,10 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
             const summaryStatusTone = ready ? "success" : "neutral";
             const momentsStatusLabel = ready ? "Ready" : "Waiting";
             const momentsStatusTone = ready ? "success" : "neutral";
-            const mediaUrl = getVideoMediaUrl(video.id, video.owner_id, video.filename, video.storage_key);
-
             return (
               <article className="video-management-card" key={video.id}>
                 <div className="video-thumb-panel" onClick={() => setSelectedVideoToPlay(video)} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedVideoToPlay(video); } }}>
-                  <video className="video-thumb-preview" src={mediaUrl} muted playsInline preload="metadata" aria-label={`Play ${video.filename}`} title="Click to play" />
+                  <VideoThumbnail video={video} token={token} />
                   <div className="video-thumb-overlay"><CirclePlay size={18} /></div>
                   {video.duration_seconds && video.duration_seconds > 0 && (
                     <span className="duration-badge">{formatDuration(video.duration_seconds)}</span>
@@ -1793,6 +1829,9 @@ export function VideoResultsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [downloadingSummary, setDownloadingSummary] = useState(false);
+  const [selectedVideoToPlay, setSelectedVideoToPlay] = useState<VideoListItem | null>(null);
+  const [playbackStartTime, setPlaybackStartTime] = useState<number | undefined>(undefined);
   const [transcriptGenerationStarted, setTranscriptGenerationStarted] = useState(false);
   const pollingRef = useRef<number | null>(null);
   const startedTranscriptGenerationRef = useRef(false);
@@ -1807,8 +1846,9 @@ export function VideoResultsPage() {
   }, [transcript, video]);
 
   const summaryState = useMemo(() => {
+    if (summary?.status === "COMPLETED") return "READY";
     if (summary?.status === "FAILED") return "FAILED";
-    if (summary) return "READY";
+    if (summary?.status === "PROCESSING" || summary?.status === "PENDING") return "PROCESSING";
     if (transcriptState === "READY") return "WAITING";
     if (transcriptState === "PROCESSING" || (video && /processing|pending|in_progress/i.test(video.processing_status))) return "PROCESSING";
     return "WAITING";
@@ -2011,6 +2051,35 @@ export function VideoResultsPage() {
     }
   }
 
+  async function handleDownloadSummary() {
+    if (!token || !video || summaryState !== "READY") return;
+    setDownloadingSummary(true);
+    try {
+      const blob = await downloadSummary(token, video.id);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${video.filename.replace(/\.[^.]+$/, "")}-summary.txt`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      setError(null);
+    } catch (reason) {
+      if (reason instanceof ApiError && (reason.status === 401 || reason.status === 403)) {
+        setError("Your session has expired. Please log in again.");
+      } else {
+        setError(reason instanceof Error ? reason.message : "Summary download failed.");
+      }
+    } finally {
+      setDownloadingSummary(false);
+    }
+  }
+
+  function playFromTimestamp(seconds: number) {
+    if (!video) return;
+    setPlaybackStartTime(seconds);
+    setSelectedVideoToPlay(video);
+  }
+
   function highlightText(text: string, query: string) {
     const trimmed = query.trim();
     if (!trimmed) return text;
@@ -2118,7 +2187,7 @@ export function VideoResultsPage() {
               ) : (
                 filteredSegments.map((segment, index) => (
                   <article className="transcript-line" key={`${segment.start_time}-${segment.end_time}-${index}`}>
-                    <time>{formatClock(segment.start_time)}</time>
+                    <button className="transcript-time-link" type="button" onClick={() => playFromTimestamp(segment.start_time)} aria-label={`Play transcript from ${formatClock(segment.start_time)}`}><time>{formatClock(segment.start_time)}</time></button>
                     <p>{highlightText(segment.text, search)}</p>
                   </article>
                 ))
@@ -2140,9 +2209,17 @@ export function VideoResultsPage() {
             <strong>AI Summary</strong>
           </div>
           <span className={`status-badge ${summaryState.toLowerCase()}`}>
-            {summaryState === "READY" ? "READY" : summaryState === "PROCESSING" ? "GENERATING" : "WAITING"}
+            {summaryState === "READY" ? "READY" : summaryState === "PROCESSING" ? "GENERATING" : summaryState === "FAILED" ? "FAILED" : "WAITING"}
           </span>
         </div>
+        {summaryState === "FAILED" && (
+          <div className="empty-state-inline failing" role="alert">
+            <p>Summary generation failed. Please retry.</p>
+            <button className="primary-button" type="button" onClick={() => void handleGenerateSummary()} disabled={busy}>
+              {busy ? "Retrying..." : "Retry summary"}
+            </button>
+          </div>
+        )}
         {summaryState === "WAITING" && transcriptState === "READY" && (
           <div className="empty-state-inline centered">
             <p>Your transcript is ready. Generate an AI-powered summary from it.</p>
@@ -2158,24 +2235,28 @@ export function VideoResultsPage() {
           </div>
         )}
         {summaryState === "READY" && summary && (
-          <div className="summary-content-stack">
+          <><div className="summary-content-stack">
             <article>
               <h3>Overview</h3>
               <p>{summary.overview || summary.content}</p>
             </article>
             <article>
+              <h3>Detailed summary</h3>
+              <p>{summary.detailed_summary || summary.content}</p>
+            </article>
+            {!!summary.main_points.length && <article>
               <h3>Main points</h3>
               <ul>
                 {summary.main_points.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}
               </ul>
-            </article>
-            <article>
+            </article>}
+            {!!summary.key_takeaways.length && <article>
               <h3>Key takeaways</h3>
               <ul>
                 {summary.key_takeaways.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
               </ul>
-            </article>
-          </div>
+            </article>}
+          </div><div className="card-actions-row"><button className="secondary-button" type="button" onClick={() => void handleDownloadSummary()} disabled={downloadingSummary}>{downloadingSummary ? "Downloading..." : "Download Summary"}</button></div></>
         )}
       </div>
 
@@ -2207,10 +2288,11 @@ export function VideoResultsPage() {
           <div className="moment-list">
             {moments.slice(0, 8).map(moment => (
               <article key={moment.id} className="moment-item">
-                <div className="moment-time">{formatClock(moment.start_time)}</div>
+                <button className="moment-time moment-time-button" type="button" onClick={() => playFromTimestamp(moment.start_time)} aria-label={`Play key moment from ${formatClock(moment.start_time)}`}>{formatClock(moment.start_time)}</button>
                 <div>
                   <strong>{moment.title}</strong>
-                  <p>{moment.description}</p>
+            <p>{moment.text || moment.description || "No source text is stored for this moment."}</p>
+            <small>{moment.topic || "General Discussion"} · Importance {(moment.importance_score * 100).toFixed(0)}%</small>
                 </div>
               </article>
             ))}
@@ -2224,6 +2306,12 @@ export function VideoResultsPage() {
         <Link className="secondary-button" to="/creator/upload">New Video</Link>
         <button className="primary-button" type="button" onClick={() => void refreshData(true)}>Refresh</button>
       </div>
+      {selectedVideoToPlay && <VideoPlayerModal
+        video={selectedVideoToPlay}
+        token={token ?? ""}
+        initialTime={playbackStartTime}
+        onClose={() => { setSelectedVideoToPlay(null); setPlaybackStartTime(undefined); }}
+      />}
     </section>
   );
 }
@@ -2235,6 +2323,7 @@ export function VideoSummaryPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     if (!token || !videoId) return;
@@ -2264,6 +2353,25 @@ export function VideoSummaryPage() {
     return () => { active = false; };
   }, [token, videoId]);
 
+  async function handleDownloadSummary() {
+    if (!token || !videoId || summary?.status !== "COMPLETED") return;
+    setDownloading(true);
+    setError(null);
+    try {
+      const blob = await downloadSummary(token, videoId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${video?.filename.replace(/\.[^.]+$/, "") ?? "video"}-summary.txt`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Summary download failed.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (!videoId) return <Navigate to="/creator/transcripts" replace />;
   if (loading) return <section className="simple-page"><div className="feature-status" role="status"><span className="status-dot" />Loading AI summary...</div></section>;
   if (!video) return <section className="simple-page"><div className="notice" role="alert">This video could not be found.<Link className="text-button" to="/creator/transcripts">Back to videos</Link></div></section>;
@@ -2283,6 +2391,11 @@ export function VideoSummaryPage() {
           <h3>✨ AI Summary isn’t available yet</h3>
           <p>Process a video to generate a summary.</p>
         </div>
+      ) : summary.status !== "COMPLETED" ? (
+        <div className="notice" role="status">
+          <strong>Summary {summary.status.toLowerCase()}</strong>
+          <p>{summary.status === "FAILED" ? "Summary generation failed. Retry from the video details page." : "The summary is not available until generation completes."}</p>
+        </div>
       ) : (
         <div className="summary-content-stack">
           <article className="result-card">
@@ -2290,17 +2403,23 @@ export function VideoSummaryPage() {
             <p>{summary.overview || summary.content}</p>
           </article>
           <article className="result-card">
+            <h3>Detailed Summary</h3>
+            <p>{summary.detailed_summary || summary.content}</p>
+          </article>
+          {!!summary.main_points.length && <article className="result-card">
             <h3>📌 Main Points</h3>
             <ul className="result-list">
               {summary.main_points.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}
             </ul>
-          </article>
-          <article className="result-card">
+          </article>}
+          {!!summary.key_takeaways.length && <article className="result-card">
             <h3>💡 Key Takeaways</h3>
             <ul className="result-list">
               {summary.key_takeaways.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
             </ul>
-          </article>
+          </article>}
+          <div className="card-actions-row"><button className="secondary-button" type="button" onClick={() => void handleDownloadSummary()} disabled={downloading}>{downloading ? "Downloading..." : "Download Summary"}</button></div>
+          {summary.updated_at && <small className="summary-meta">Generated {new Date(summary.updated_at).toLocaleString()}</small>}
         </div>
       )}
     </section>

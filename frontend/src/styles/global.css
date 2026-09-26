@@ -1585,6 +1585,17 @@ h1 {
   font-size: 11px;
   font-weight: 800;
 }
+.transcript-time-link, .moment-time-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent, #f27b62);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.transcript-time-link:focus-visible, .moment-time-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; border-radius: 3px; }
 
 .moment-item strong {
   display: block;

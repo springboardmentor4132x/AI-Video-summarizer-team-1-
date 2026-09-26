@@ -20,4 +20,5 @@ numpy>=1.26
 scikit-learn>=1.4
 transformers>=4.36.0
 sentence-transformers>=3.0
+keybert>=0.8.5
 openai-whisper

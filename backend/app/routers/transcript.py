@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from uuid import uuid4
 from pathlib import Path
 
@@ -222,8 +222,39 @@ def download_video_transcript(
             detail="Transcript is not yet available for download.",
         )
 
-    content = transcript.text or ""
-    safe_name = "transcript.txt"
+    video = _get_owned_video(video_id, db, current_user)
+    
+    # Prefer explicit text content if available, or return empty if explicitly None
+    if transcript.text:
+        content = transcript.text.strip() if transcript.text.strip() else ""
+    elif transcript.text is None:
+        # Explicitly None means no content
+        content = ""
+    else:
+        # Fall back to rendering segments if text is not available
+        segments = transcript.segments or []
+        rendered_segments = []
+        if segments:
+            for segment in segments:
+                if not isinstance(segment, dict) or not isinstance(segment.get("text"), str):
+                    continue
+                start = segment.get("start_time", segment.get("start"))
+                try:
+                    seconds = max(0.0, float(start))
+                    timestamp = f"[{int(seconds // 60):02d}:{seconds % 60:05.2f}]"
+                except (TypeError, ValueError):
+                    timestamp = "[--:--]"
+                rendered_segments.append(f"{timestamp} {segment['text'].strip()}")
+        
+        if rendered_segments:
+            lines = [f"Video: {video.filename}", "", "Transcript", ""] + rendered_segments
+            content = "\n".join(lines) + "\n"
+        else:
+            content = ""
+
+    import re
+    safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', video.filename.rsplit('.', 1)[0])
+    safe_name = f"{safe_name}_transcript.txt"
 
     return Response(
         content=content.encode("utf-8"),

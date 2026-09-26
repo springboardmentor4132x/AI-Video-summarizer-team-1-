@@ -29,6 +29,7 @@ vi.mock("./services/api", () => ({
   retrySummary: vi.fn(),
   deleteVideo: vi.fn(),
   downloadTranscript: vi.fn(),
+  downloadSummary: vi.fn(),
   register: vi.fn(),
   checkPermission: vi.fn(),
   getVideoMediaUrl: vi.fn(),
@@ -37,7 +38,6 @@ vi.mock("./services/api", () => ({
 const mockedUseAuth = vi.mocked(useAuth);
 const api = await import("./services/api");
 const mockedUploadVideo = vi.mocked(api.uploadVideo);
-const mockedProcessYouTubeVideo = vi.mocked(api.processYouTubeVideo);
 
 describe("VideoUploadPage", () => {
   beforeEach(() => {
@@ -50,7 +50,6 @@ describe("VideoUploadPage", () => {
       logout: vi.fn(),
     } as any);
     mockedUploadVideo.mockReset();
-    mockedProcessYouTubeVideo.mockReset();
   });
 
   it("defaults to the upload tab and keeps the existing upload workflow available", () => {
@@ -59,41 +58,14 @@ describe("VideoUploadPage", () => {
     expect(screen.getByLabelText(/choose a video file|Drop your video here/i)).toBeInTheDocument();
   });
 
-  it("switches to the YouTube URL tab and validates empty and invalid URLs", async () => {
+  it("clearly disables YouTube URL processing because no backend endpoint exists", () => {
     render(<VideoUploadPage />);
-    fireEvent.click(screen.getByRole("button", { name: "YouTube URL" }));
-
-    const input = screen.getByPlaceholderText("Paste YouTube video URL");
-    fireEvent.click(screen.getByRole("button", { name: "Process Video" }));
-    expect(await screen.findByText("Please paste a YouTube video URL.")).toBeInTheDocument();
-
-    fireEvent.change(input, { target: { value: "https://example.com/not-youtube" } });
-    fireEvent.click(screen.getByRole("button", { name: "Process Video" }));
-    expect(await screen.findByText("Please enter a valid YouTube URL.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /YouTube URL \(unavailable\)/i })).toBeDisabled();
+    expect(screen.getByText(/backend does not support it/i)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Paste YouTube video URL")).not.toBeInTheDocument();
   });
 
-  it("submits a valid YouTube URL and shows the success state", async () => {
-    mockedProcessYouTubeVideo.mockResolvedValue({
-      video_id: "abc",
-      source_type: "YOUTUBE",
-      source_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-      status: "PROCESSING",
-    });
-
-    render(<VideoUploadPage />);
-    fireEvent.click(screen.getByRole("button", { name: "YouTube URL" }));
-    fireEvent.change(screen.getByPlaceholderText("Paste YouTube video URL"), {
-      target: { value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Process Video" }));
-
-    await waitFor(() => expect(mockedProcessYouTubeVideo).toHaveBeenCalledWith("token-123", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
-    expect(await screen.findByText("YouTube video accepted", { exact: true })).toBeInTheDocument();
-    expect(await screen.findByText(/Processing status: PROCESSING/i)).toBeInTheDocument();
-  });
-
-  it("renders the dedicated MCQ quiz flow with real answer options", async () => {
+  it("shows completed videos but clearly marks quiz generation unavailable without a backend endpoint", async () => {
     mockedUseAuth.mockReturnValue({
       token: "token-123",
       user: {
@@ -122,39 +94,14 @@ describe("VideoUploadPage", () => {
         owner_name: "Creator User",
       },
     ]);
-    vi.mocked(api.getExpectedMcqs).mockResolvedValue([
-      {
-        question: "What type of programming language is Python?",
-        options: [
-          "Low-level programming language",
-          "High-level general-purpose programming language",
-          "Assembly language",
-          "Machine language",
-        ],
-        correct_answer: "High-level general-purpose programming language",
-        explanation: "The transcript describes Python as a high-level general-purpose language.",
-        difficulty: "Easy",
-        topic: "Python Basics",
-        source: "Transcript",
-        timestamp: "00:00",
-      },
-    ]);
-
     render(<MCQQuizPage />);
 
     await waitFor(() => expect(api.getVideos).toHaveBeenCalledWith("token-123", 500));
     fireEvent.change(screen.getByLabelText(/Select Video/i), { target: { value: "video-1" } });
-    fireEvent.change(screen.getByLabelText(/Number of Questions/i), { target: { value: "1" } });
-    fireEvent.click(screen.getByRole("button", { name: /Generate Quiz/i }));
-
-    expect(await screen.findByText("Question 1 of 1")).toBeInTheDocument();
-    expect(await screen.findByText("What type of programming language is Python?")).toBeInTheDocument();
-    expect(screen.getAllByRole("radio")).toHaveLength(4);
-
-    fireEvent.click(screen.getByLabelText("B. High-level general-purpose programming language"));
-    fireEvent.click(screen.getByRole("button", { name: /Submit Answer/i }));
-    expect(await screen.findByText("✅ Correct!")).toBeInTheDocument();
-    expect(await screen.findByText(/Correct Answer:/i)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "sample.mp4" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Generate Quiz \(unavailable\)/i })).toBeDisabled();
+    expect(screen.getByText(/backend does not currently provide an MCQ endpoint/i)).toBeInTheDocument();
+    expect(api.getExpectedMcqs).not.toHaveBeenCalled();
   });
 });
 

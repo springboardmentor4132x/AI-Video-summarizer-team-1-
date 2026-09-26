@@ -17,3 +17,19 @@ class VideoStatusResponse(BaseModel):
     status: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class OwnedVideoResponse(VideoResponse):
+    """Video response for owner-scoped routes that need the owner identifier."""
+    user_id: int
+
+
+class VideoPipelineStatusResponse(BaseModel):
+    id: int
+    filename: str
+    status: str
+    uploaded_at: datetime
+    transcript_status: str
+    summary_status: str
+    key_moments_status: str
+    key_moment_count: int

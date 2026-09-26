@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { Sparkles, X } from "lucide-react";
+import { Download, Sparkles, X } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
-import { generateSummary, getSummary, retrySummary, type Summary } from "../../services/api";
+import { downloadSummary, generateSummary, getSummary, retrySummary, type Summary } from "../../services/api";
 
 interface SummaryPanelProps {
   videoId: string;
@@ -23,6 +23,7 @@ export function SummaryPanel({ videoId, durationSeconds, defaultOpen = false, sh
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -59,6 +60,25 @@ export function SummaryPanel({ videoId, durationSeconds, defaultOpen = false, sh
     }
   }
 
+  async function handleDownload() {
+    if (!token || summary?.status !== "COMPLETED") return;
+    setDownloading(true);
+    setError(null);
+    try {
+      const blob = await downloadSummary(token, videoId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "summary.txt";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Summary download failed.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   useEffect(() => {
     if (defaultOpen && token) {
       void openSummary();
@@ -75,7 +95,7 @@ export function SummaryPanel({ videoId, durationSeconds, defaultOpen = false, sh
       {error && <p className="form-error" role="alert">{error}</p>}
       {!loading && !error && !summary && <div className="summary-empty"><p>Your AI summary will appear here after processing.</p><button className="primary-button" type="button" onClick={() => void createSummary()} disabled={generating}>{generating ? "Generating summary..." : "Generate summary"}</button></div>}
       {!loading && !error && summary?.status === "FAILED" && <div className="summary-empty"><p>{summary.error_message || "Summary generation failed."}</p><button className="primary-button" type="button" onClick={() => void createSummary()} disabled={generating}>{generating ? "Generating summary..." : "Retry summary"}</button></div>}
-      {!loading && !error && summary && summary.status !== "FAILED" && <div className="summary-content"><section><strong>Overview</strong><p>{summary.overview || summary.content}</p></section><section><strong>Main Points</strong><ul>{summary.main_points.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}</ul></section><section><strong>Key Takeaways</strong><ul>{summary.key_takeaways.map((takeaway, index) => <li key={`${takeaway}-${index}`}>{takeaway}</li>)}</ul></section><section><strong>Duration</strong><p>{formatDuration(summary.duration_seconds ?? durationSeconds)}</p></section></div>}
+      {!loading && !error && summary?.status === "COMPLETED" && <div className="summary-content"><section><strong>Short Summary</strong><p>{summary.short_summary || summary.overview || summary.content}</p></section><section><strong>Detailed Summary</strong><p>{summary.detailed_summary || summary.content}</p></section>{!!summary.key_takeaways.length && <section><strong>Key Takeaways</strong><ul>{summary.key_takeaways.map((takeaway, index) => <li key={`${takeaway}-${index}`}>{takeaway}</li>)}</ul></section>}<section><strong>Duration</strong><p>{formatDuration(summary.duration_seconds ?? durationSeconds)}</p></section><button className="text-button" type="button" onClick={() => void handleDownload()} disabled={downloading}>{downloading ? "Downloading..." : <><Download size={14} />Download Summary</>}</button></div>}
       {message && <p className="upload-success" role="status">{message}</p>}
     </div>}
   </>;
