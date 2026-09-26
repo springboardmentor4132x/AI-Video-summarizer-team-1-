@@ -14,3 +14,9 @@ venv/
 *.db
 .pytest_tmp/
 bg_tasks.log
+bg_tasks.log
+*.log
+bg_tasks.log
+*.log
+register_test.py
+scripts/

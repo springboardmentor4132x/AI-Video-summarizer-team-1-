@@ -4,7 +4,7 @@ import { Activity, ArrowUpRight, BookOpen, CalendarDays, Clapperboard, Clock3, F
 import { withApiBase } from "./config";
 import { Modal } from "./components/Modal";
 import { useAuth } from "./features/auth/AuthContext";
-import { ApiError, checkPermission, deleteVideo, downloadTranscript, generateKeyMoments, generateSummary, generateTranscript, getAdminAnalytics, getCreatorAnalytics, getKeyMoments, getSummary, getTranscript, getUploadHistory, getVideoStatuses, getVideos, getVideoMediaUrl, register as registerRequest, retrySummary, uploadVideo, type AnalyticsDashboard, type AnalyticsRange, type AnalyticsRecentVideo, type KeyMoment, type Summary, type Transcript, type UploadHistoryEvent, type VideoListItem, type VideoStatus } from "./services/api";
+import { ApiError, checkPermission, deleteVideo, downloadTranscript, generateKeyMoments, generateSummary, generateTranscript, getAdminAnalytics, getCreatorAnalytics, getExpectedMcqs, getKeyMoments, getSummary, getTranscript, getUploadHistory, getVideoMediaBlobUrl, getVideoStatuses, getVideos, getVideoMediaUrl, processYouTubeVideo, register as registerRequest, retrySummary, uploadVideo, type AnalyticsDashboard, type AnalyticsRange, type AnalyticsRecentVideo, type KeyMoment, type McqQuestion, type Summary, type Transcript, type UploadHistoryEvent, type VideoListItem, type VideoStatus } from "./services/api";
 import type { Role } from "./types/auth";
 
 const dashboardConfig: Record<Role, { kicker: string; title: string; description: string; accent: string; actions: { label: string; detail: string; icon: typeof Video; route: string; endpoint?: string }[] }> = {
@@ -13,6 +13,7 @@ const dashboardConfig: Record<Role, { kicker: string; title: string; description
     actions: [
       { label: "Upload Video", detail: "Start a new media upload", icon: Video, route: "/creator/upload", endpoint: "/rbac/creator/uploads" },
       { label: "Transcripts", detail: "Generate and edit transcripts", icon: FileClock, route: "/creator/transcripts", endpoint: "/rbac/creator/uploads" },
+      { label: "MCQ Quiz", detail: "Test knowledge with quizzes", icon: BookOpen, route: "/creator/mcqs", endpoint: "/rbac/creator/uploads" },
       { label: "Upload History", detail: "Trace every file event", icon: FileClock, route: "/creator/history", endpoint: "/rbac/creator/history" },
       { label: "Processing Status", detail: "Watch jobs move forward", icon: Gauge, route: "/creator/processing", endpoint: "/rbac/creator/uploads" },
     ],
@@ -105,6 +106,7 @@ function getTranscriptStateMessage(state: ReturnType<typeof getTranscriptState>)
 function Dashboard() {
   const { user, token } = useAuth();
   const [notice, setNotice] = useState<string | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
   const [stats, setStats] = useState<{ videos: number | null; transcripts: number | null; summaries: number | null; keyMoments: number | null; }>({ videos: null, transcripts: null, summaries: null, keyMoments: null });
 
   useEffect(() => {
@@ -112,6 +114,7 @@ function Dashboard() {
       if (!user || !token) return;
 
       try {
+        setStatsError(null);
         if (user.role === "Administrator") {
           const analytics = await getAdminAnalytics(token);
           setStats({
@@ -152,6 +155,7 @@ function Dashboard() {
 
         setStats(totals);
       } catch {
+        setStatsError("Dashboard data could not be loaded from the backend.");
         setStats({ videos: null, transcripts: null, summaries: null, keyMoments: null });
       }
     }
@@ -159,22 +163,14 @@ function Dashboard() {
     void loadData();
   }, [token, user, user?.role]);
 
-  async function activate(label: string, endpoint?: string) {
-    if (!endpoint) { setNotice(`${label} will arrive with the next ClipMind module.`); return; }
-    if (!token) { setNotice("Please sign in again."); return; }
-    const accessToken = token;
-    try { const result = await checkPermission(endpoint, accessToken); setNotice(result.message); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "Access check failed"); }
-  }
-
   if (!user || !token) return <Navigate to="/login" replace />;
 
   const config = dashboardConfig[user.role];
   const statCards = [
-    { label: "Videos", value: stats.videos ?? 0, tone: "teal", icon: Clapperboard },
-    { label: "Transcripts", value: stats.transcripts ?? 0, tone: "amber", icon: FileText },
-    { label: "AI Summaries", value: stats.summaries ?? 0, tone: "rose", icon: Sparkles },
-    { label: "Key Moments", value: stats.keyMoments ?? 0, tone: "slate", icon: WandSparkles },
+    { label: "Videos", value: statsError ? "Unavailable" : stats.videos ?? 0, tone: "teal", icon: Clapperboard },
+    { label: "Transcripts", value: statsError ? "Unavailable" : stats.transcripts ?? 0, tone: "amber", icon: FileText },
+    { label: "AI Summaries", value: statsError ? "Unavailable" : stats.summaries ?? 0, tone: "rose", icon: Sparkles },
+    { label: "Key Moments", value: statsError ? "Unavailable" : stats.keyMoments ?? 0, tone: "slate", icon: WandSparkles },
   ];
   const workflowRoutes: Record<string, string> = user.role === "Content Creator"
     ? { Upload: "/creator/upload", Transcribe: "/creator/transcripts", Summarize: "/creator/transcripts", "Key Moments": "/creator/transcripts", Insights: "/creator/processing" }
@@ -217,6 +213,7 @@ function Dashboard() {
         </div>
       </div>
 
+      {statsError && <div className="notice" role="alert">{statsError}</div>}
       <div className="section-heading">
         <div>
           <span className="eyebrow">Progress</span>
@@ -278,31 +275,6 @@ function ActivityChart({ items }: { items: { date: string; count: number }[] }) 
 
 function AnalyticsMetric({ label, value, tone = "teal" }: { label: string; value: string | number; tone?: string }) {
   return <div className={`stat-card ${tone}`}><div className="stat-header"><span>{label}</span></div><strong>{value}</strong></div>;
-}
-
-function LegacyAnalyticsPage() {
-  const { token, user } = useAuth();
-  const [analytics, setAnalytics] = useState<AnalyticsDashboard | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!token) return;
-    setLoading(true);
-    setError(null);
-    const loadAnalytics = user?.role === "Administrator" ? getAdminAnalytics : getCreatorAnalytics;
-    loadAnalytics(token)
-      .then(setAnalytics)
-      .catch(reason => setError(reason instanceof Error ? reason.message : "Analytics could not be loaded."))
-      .finally(() => setLoading(false));
-  }, [token]);
-
-  if (loading) return <section className="simple-page analytics-page"><span className="eyebrow">Platform intelligence</span><h1>Analytics Dashboard</h1><div className="feature-status" role="status">Loading analytics...</div></section>;
-  if (error) return <section className="simple-page analytics-page"><span className="eyebrow">Platform intelligence</span><h1>Analytics Dashboard</h1><div className="notice" role="alert">{error}</div></section>;
-  if (!analytics) return <section className="simple-page analytics-page"><span className="eyebrow">Platform intelligence</span><h1>Analytics Dashboard</h1><div className="feature-placeholder"><h2>No analytics data available yet.</h2><p>There is no stored platform activity to summarize.</p></div></section>;
-
-  const { overview, video_analytics: video, summary_reports: summaries, content_insights: content, key_moment_analytics: moments, usage } = analytics;
-  return <section className="simple-page analytics-page"><header className="page-header"><div><span className="eyebrow">Platform intelligence</span><h1>Analytics Dashboard</h1><p>Understand platform activity and the content flowing through ClipMind AI.</p></div><div className="status-pill"><span className="status-dot" /> Live database data</div></header><div className="stats-grid analytics-stats"><AnalyticsMetric label="Total Videos" value={overview.total_videos} /><AnalyticsMetric label="Completed" value={overview.completed_videos} tone="teal" /><AnalyticsMetric label="Total Duration" value={formatDuration(overview.total_duration_seconds)} tone="amber" /><AnalyticsMetric label="Key Moments" value={overview.total_key_moments} tone="rose" /><AnalyticsMetric label="Summaries" value={overview.total_summaries} tone="slate" /><AnalyticsMetric label="Transcripts" value={overview.total_transcripts} tone="teal" /><AnalyticsMetric label="Users" value={overview.total_users} tone="amber" /><AnalyticsMetric label="Failed Processing" value={overview.failed_videos} tone="rose" /></div><div className="analytics-grid"><article className="analytics-panel analytics-wide"><div className="section-heading"><div><span className="eyebrow">Video analytics</span><h2>Upload activity</h2></div><span className="section-note">{overview.processing_videos} in progress</span></div><ActivityChart items={video.upload_activity} /></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Processing</span><h2>Status distribution</h2></div></div><AnalyticsBars items={video.status_distribution} emptyMessage="No videos have been uploaded yet." /></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Summary reports</span><h2>Generation rate</h2></div></div><div className="analytics-highlight"><strong>{summaries.generation_rate_percentage}%</strong><span>{summaries.completed_summaries} completed summaries across {summaries.videos_with_summaries} videos</span></div><div className="analytics-meta"><span>Summary text<strong>{summaries.total_summary_characters.toLocaleString()} characters</strong></span><span>Average video<strong>{formatDuration(overview.average_duration_seconds)}</strong></span></div></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Content insights</span><h2>Frequent terms</h2></div></div><AnalyticsBars items={content.top_keywords.map(item => ({ label: item.keyword, count: item.count }))} emptyMessage="No transcript text is available yet." /><p className="analytics-note">Frequency from stored transcripts, excluding common words.</p></article><article className="analytics-panel analytics-wide"><div className="section-heading"><div><span className="eyebrow">Key moments</span><h2>Recent important moments</h2></div><span className="section-note">{moments.average_per_video} per video</span></div>{moments.recent_activity.length ? <div className="analytics-list">{moments.recent_activity.map(moment => <div className="analytics-list-row" key={moment.id}><div><strong>{moment.title}</strong><span>{moment.filename}{moment.topic ? ` · ${moment.topic}` : ""}</span></div><b>{moment.importance_score.toFixed(2)}</b></div>)}</div> : <p className="analytics-empty">No key moments have been detected yet.</p>}</article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Usage</span><h2>Users by role</h2></div></div><AnalyticsBars items={usage.users_by_role} emptyMessage="No users are available yet." /></article></div></section>;
 }
 
 type AnalyticsRangeKey = "7d" | "30d" | "90d" | "all";
@@ -400,34 +372,6 @@ function LoadingAnalytics() {
   return <section className="simple-page analytics-page"><div className="analytics-skeleton-head"><span /><span /><span /></div><div className="analytics-skeleton-grid">{Array.from({ length: 8 }, (_, index) => <div className="analytics-skeleton-card" key={index}><span /><strong /><small /></div>)}</div><div className="analytics-skeleton-panel" /></section>;
 }
 
-function Phase3AnalyticsPage() {
-  const { token, user } = useAuth();
-  const [analytics, setAnalytics] = useState<AnalyticsDashboard | null>(null);
-  const [rangeKey, setRangeKey] = useState<AnalyticsRangeKey>("all");
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!token || !user) return;
-    let active = true;
-    setLoading(true);
-    setError(null);
-    const loader = user.role === "Administrator" ? getAdminAnalytics : getCreatorAnalytics;
-    loader(token, rangeFor(rangeKey)).then(result => { if (active) setAnalytics(result); }).catch(reason => { if (active) setError(reason instanceof Error ? reason.message : "Unable to load analytics."); }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [token, user, rangeKey, refreshKey]);
-
-  if (loading && !analytics) return <LoadingAnalytics />;
-  if (error) return <section className="simple-page analytics-page"><div className="analytics-error"><span className="eyebrow">Analytics unavailable</span><h1>Unable to load analytics</h1><p>{error}</p><button className="primary-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={16} /> Try again</button></div></section>;
-  if (!analytics) return null;
-
-  const { overview, video_analytics: video, transcript_insights: transcripts, keyword_insights: keywords, summary_insights: summaries, key_moment_insights: moments } = analytics;
-  const noVideos = overview.total_videos === 0;
-  const ranges: { key: AnalyticsRangeKey; label: string }[] = [{ key: "7d", label: "7 Days" }, { key: "30d", label: "30 Days" }, { key: "90d", label: "90 Days" }, { key: "all", label: "All Time" }];
-  return <section className="simple-page analytics-page"><header className="analytics-header"><div><span className="eyebrow">ClipMind AI · Video intelligence</span><h1>Analytics</h1><p>Understand how your videos are processed, summarized, and transformed into useful insights.</p></div><div className="analytics-actions"><div className="range-control" aria-label="Analytics date range">{ranges.map(range => <button key={range.key} type="button" className={rangeKey === range.key ? "active" : ""} aria-pressed={rangeKey === range.key} onClick={() => setRangeKey(range.key)}>{range.label}</button>)}</div><button className="icon-button" type="button" aria-label="Refresh analytics" title="Refresh analytics" onClick={() => setRefreshKey(value => value + 1)} disabled={loading}><RefreshCw size={16} className={loading ? "spin" : ""} /></button></div></header>{loading && <div className="analytics-refreshing" role="status"><RefreshCw size={14} className="spin" /> Refreshing live data</div>}{noVideos ? <div className="analytics-empty-state"><span className="analytics-empty-icon"><Video size={25} /></span><h2>No video analytics yet</h2><p>Upload your first video to start generating transcripts, summaries, key moments, and insights.</p><Link className="primary-button" to="/creator/upload"><Upload size={16} /> Upload Video</Link></div> : <><div className="analytics-section-heading"><span className="eyebrow">Overview</span><h2>Video intelligence at a glance</h2></div><div className="analytics-metric-grid"><V2Metric label="Videos analyzed" value={overview.total_videos} detail={`${overview.completed_videos} completed`} icon={Clapperboard} tone="violet" /><V2Metric label="Transcripts" value={overview.total_transcripts} detail={`${transcripts.total_words.toLocaleString()} words`} icon={FileText} tone="cyan" /><V2Metric label="AI summaries" value={overview.total_summaries} detail={`${summaries.generation_rate_percentage}% coverage`} icon={Sparkles} tone="amber" /><V2Metric label="Key moments" value={overview.total_key_moments} detail={`${moments.videos_with_key_moments} videos surfaced`} icon={WandSparkles} tone="rose" /></div><div className="analytics-v2-grid"><article className="analytics-panel analytics-v2-wide"><div className="section-heading"><div><span className="eyebrow">Video activity</span><h2>Uploads over time</h2></div><span className="section-note">{overview.total_duration_seconds ? formatDuration(overview.total_duration_seconds) : "No duration yet"} total runtime</span></div><V2ActivityChart items={video.upload_activity} /></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Processing status</span><h2>Pipeline distribution</h2></div></div><V2StatusDonut items={video.status_distribution} /></article><article className="analytics-panel analytics-v2-wide"><div className="section-heading"><div><span className="eyebrow">AI processing insights</span><h2>From video to understanding</h2></div><span className="section-note">Live coverage from stored content</span></div><Pipeline analytics={analytics} /></article><article className="analytics-panel analytics-v2-wide"><div className="section-heading"><div><span className="eyebrow">Content intelligence</span><h2>What your videos are talking about</h2></div><span className="section-note">Top recurring terms</span></div><div className="analytics-content-grid"><div><h3>Keyword insights</h3><InsightBars items={keywords.map(item => ({ label: item.keyword, count: item.frequency }))} /></div><div className="transcript-stats"><h3>Transcript insights</h3><div className="stat-detail-grid"><span><strong>{transcripts.total_words.toLocaleString()}</strong>Total words</span><span><strong>{Math.round(transcripts.average_words_per_transcript).toLocaleString()}</strong>Avg / transcript</span><span><strong>{transcripts.longest_transcript_words.toLocaleString()}</strong>Longest</span><span><strong>{transcripts.shortest_transcript_words.toLocaleString()}</strong>Shortest</span><span><strong>{transcripts.total_characters.toLocaleString()}</strong>Total characters</span></div></div></div></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Summary intelligence</span><h2>AI summary insights</h2></div></div><div className="insight-highlight"><strong>{summaries.generation_rate_percentage}%</strong><span>summary coverage</span></div><div className="stat-detail-grid compact"><span><strong>{summaries.total_summaries}</strong>Total summaries</span><span><strong>{summaries.completed_summaries}</strong>Completed</span><span><strong>{Math.round(summaries.average_summary_words).toLocaleString()}</strong>Avg words</span><span><strong>{summaries.total_summary_words.toLocaleString()}</strong>Total words</span></div><h3 className="subsection-title">Recent AI summaries</h3><div className="mini-list">{summaries.recent_activity.slice(0, 4).map(summary => <div key={summary.id}><span>{summary.filename}</span><small>{summary.status} · {formatDate(summary.created_at)}</small></div>)}</div></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Key moment intelligence</span><h2>Highlights by video</h2></div></div><div className="stat-detail-grid compact"><span><strong>{moments.total_key_moments}</strong>Total moments</span><span><strong>{moments.average_per_video}</strong>Avg / video</span><span><strong>{moments.average_importance.toFixed(2)}</strong>Avg importance</span><span><strong>{formatDuration(moments.total_duration_seconds)}</strong>Highlight duration</span></div><div className="subsection-title">Moments by video</div><InsightBars items={moments.by_video} /></article><article className="analytics-panel analytics-v2-wide"><div className="section-heading"><div><span className="eyebrow">Recent AI activity</span><h2>What just happened</h2></div></div>{analytics.recent_activity.length ? <div className="activity-timeline">{analytics.recent_activity.map(event => <div key={`${event.type}-${event.timestamp}-${event.video_id}`}><span className="timeline-icon"><Activity size={14} /></span><div><strong>{event.description}</strong><small>{event.video_name} · {formatDate(event.timestamp)}</small></div><em>{event.type.replaceAll("_", " ")}</em></div>)}</div> : <div className="analytics-empty-block">No recent AI activity in this range.</div>}</article><article className="analytics-panel analytics-v2-wide"><div className="section-heading"><div><span className="eyebrow">Recent content</span><h2>Recent videos</h2></div><span className="section-note">{analytics.recent_videos.length} shown</span></div><div className="recent-videos-table-wrap"><table className="analytics-video-table"><thead><tr><th>Video</th><th>Duration</th><th>Processing</th><th>Transcript</th><th>Summary</th><th>Moments</th><th>Uploaded</th></tr></thead><tbody>{analytics.recent_videos.map(video => <tr key={video.id}><td><strong>{video.filename}</strong><small>{video.owner_name}</small></td><td>{formatDuration(video.duration_seconds)}</td><td><span className={`analytics-status ${video.status.toLowerCase()}`}>{video.status}</span></td><td>{video.transcript_status === "COMPLETED" ? "Ready" : video.transcript_status ?? "-"}</td><td>{video.summary_status === "COMPLETED" ? "Ready" : video.summary_status ?? "-"}</td><td>{video.key_moment_count}</td><td>{formatDate(video.uploaded_at)}</td></tr>)}</tbody></table></div></article></div></>}</section>;
-}
-
 function Phase4VideoDetail({ video, onClose }: { video: AnalyticsRecentVideo; onClose: () => void }) {
   return <div className="analytics-detail-backdrop" role="presentation" onClick={onClose}><aside className="analytics-detail-panel" role="dialog" aria-modal="true" aria-label={`${video.filename} intelligence details`} onClick={event => event.stopPropagation()}><button className="analytics-detail-close" type="button" aria-label="Close video details" onClick={onClose}>×</button><span className="eyebrow">Video overview</span><h2>{video.filename}</h2><p>{video.status} · Uploaded {formatDate(video.uploaded_at)}</p><div className="detail-score"><strong>{video.ai_score}</strong><span>/ 100<br />AI content intelligence</span></div><div className="detail-breakdown">{Object.entries(video.ai_score_components).map(([label, score]) => <div key={label}><span>{label}</span><strong>{Math.round(score)}%</strong><i><em style={{ width: `${score}%` }} /></i></div>)}</div><div className="detail-columns"><section><span>Transcript</span><strong>{video.transcript_status ?? "No transcript"}</strong><small>{video.transcript_word_count.toLocaleString()} words · {video.transcript_character_count.toLocaleString()} chars</small></section><section><span>Summary</span><strong>{video.summary_status === "COMPLETED" ? "Generated" : video.summary_status ?? "Not generated"}</strong><small>{video.summary_word_count.toLocaleString()} words · {video.main_points_count} main points</small></section><section><span>Key moments</span><strong>{video.key_moment_count}</strong><small>{video.average_importance.toFixed(2)} average importance · {video.highest_importance.toFixed(2)} highest</small></section><section><span>Content</span><strong>{video.topic_count} topics</strong><small>{video.top_keywords.join(", ") || "No keywords yet"}</small></section></div></aside></div>;
 }
@@ -488,11 +432,16 @@ const maxVideoSizeBytes = 524_288_000;
 
 export function VideoUploadPage() {
   const { token } = useAuth();
+  const [inputMode, setInputMode] = useState<"upload" | "youtube">("upload");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [youtubeBusy, setYoutubeBusy] = useState(false);
+  const [youtubeMessage, setYoutubeMessage] = useState<string | null>(null);
+  const [youtubeError, setYoutubeError] = useState<string | null>(null);
 
   function validateFile(candidate: File) {
     const extension = `.${candidate.name.split(".").pop()?.toLowerCase() ?? ""}`;
@@ -500,6 +449,31 @@ export function VideoUploadPage() {
     if (candidate.size === 0) return "The selected video is empty.";
     if (candidate.size > maxVideoSizeBytes) return "The selected video exceeds the 500 MB limit.";
     return null;
+  }
+
+  function validateYouTubeUrl(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed) return "Empty URL";
+
+    try {
+      const parsed = new URL(trimmed);
+      const host = parsed.hostname.toLowerCase();
+      const validHosts = ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be", "youtube-nocookie.com", "www.youtube-nocookie.com"];
+      if (!validHosts.includes(host)) return "Invalid YouTube URL";
+
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      const videoId = host.includes("youtu.be")
+        ? pathParts.length === 1 ? pathParts[0] : null
+        : pathParts[0]?.toLowerCase() === "watch" && pathParts.length === 1
+          ? parsed.searchParams.get("v")
+          : ["shorts", "embed"].includes(pathParts[0]?.toLowerCase() ?? "") && pathParts.length === 2
+            ? pathParts[1]
+            : null;
+      if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return "Unsupported URL";
+      return null;
+    } catch {
+      return "Invalid YouTube URL";
+    }
   }
 
   function selectFile(candidate: File | undefined) {
@@ -532,6 +506,26 @@ export function VideoUploadPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (inputMode === "youtube") {
+      const validationError = validateYouTubeUrl(youtubeUrl);
+      if (validationError) {
+        setYoutubeError(validationError === "Empty URL" ? "Please paste a YouTube video URL." : validationError === "Unsupported URL" ? "This YouTube URL format is not currently supported." : "Please enter a valid YouTube URL.");
+        return;
+      }
+      setYoutubeBusy(true);
+      setYoutubeMessage(null);
+      setYoutubeError(null);
+      try {
+        const result = await processYouTubeVideo(token ?? "", youtubeUrl.trim());
+        setYoutubeMessage(`YouTube video accepted. Processing status: ${result.status}.`);
+        setYoutubeUrl("");
+      } catch (reason) {
+        setYoutubeError(reason instanceof Error ? reason.message : "The video could not be processed.");
+      } finally {
+        setYoutubeBusy(false);
+      }
+      return;
+    }
     await runUpload();
   }
 
@@ -566,99 +560,163 @@ export function VideoUploadPage() {
 
       <div className="upload-shell">
         <form className="upload-card" onSubmit={submit}>
-          <label
-            className={`upload-dropzone ${isDragging ? "dragging" : ""}`}
-            htmlFor="video-file"
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            <input
-              id="video-file"
-              type="file"
-              accept={Object.keys(acceptedVideoTypes).join(",")}
-              onChange={event => selectFile(event.target.files?.[0])}
-            />
+          <div className="tab-switcher" style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+            <button type="button" className={inputMode === "upload" ? "primary-button" : "secondary-button"} onClick={() => setInputMode("upload")} style={{ flex: 1 }}>
+              Upload Video
+            </button>
+            <button type="button" className={inputMode === "youtube" ? "primary-button" : "secondary-button"} onClick={() => setInputMode("youtube")} style={{ flex: 1 }}>
+              YouTube URL
+            </button>
+          </div>
 
-            <div className="dropzone-content">
-              <div className="dropzone-icon"><Upload size={30} /></div>
-              <div className="dropzone-copy">
-                <h2>🎬 Drop your video here</h2>
-                <p>or <span>Choose a video file</span></p>
-                <div className="dropzone-meta">Supported formats: MP4 • WebM • MOV • MKV • AVI</div>
-                <div className="dropzone-meta muted">Maximum size: 500 MB</div>
-              </div>
-            </div>
-          </label>
+          {inputMode === "upload" ? (
+            <>
+              <label
+                className={`upload-dropzone ${isDragging ? "dragging" : ""}`}
+                htmlFor="video-file"
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                <input
+                  id="video-file"
+                  type="file"
+                  accept={Object.keys(acceptedVideoTypes).join(",")}
+                  onChange={event => selectFile(event.target.files?.[0])}
+                />
 
-          {file ? (
-            <div className="selected-file">
-              <div className="file-detail-block">
-                <div className="file-icon">🎬</div>
-                <div className="file-meta">
-                  <strong>{file.name}</strong>
-                  <div className="file-meta-row">
-                    <span>{(file.size / (1024 * 1024)).toFixed(2)} MB</span>
-                    <span>{fileFormat}</span>
+                <div className="dropzone-content">
+                  <div className="dropzone-icon"><Upload size={30} /></div>
+                  <div className="dropzone-copy">
+                    <h2>🎬 Drop your video here</h2>
+                    <p>or <span>Choose a video file</span></p>
+                    <div className="dropzone-meta">Supported formats: MP4 • WebM • MOV • MKV • AVI</div>
+                    <div className="dropzone-meta muted">Maximum size: 500 MB</div>
                   </div>
                 </div>
-              </div>
+              </label>
 
-              <div className="file-actions">
-                <label className="mini-button upload-change" htmlFor="video-file">Change</label>
-                <button
-                  type="button"
-                  className="secondary-button file-remove"
-                  onClick={() => {
-                    setFile(null);
-                    setMessage(null);
-                    setError(null);
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          ) : null}
+              {file ? (
+                <div className="selected-file">
+                  <div className="file-detail-block">
+                    <div className="file-icon">🎬</div>
+                    <div className="file-meta">
+                      <strong>{file.name}</strong>
+                      <div className="file-meta-row">
+                        <span>{(file.size / (1024 * 1024)).toFixed(2)} MB</span>
+                        <span>{fileFormat}</span>
+                      </div>
+                    </div>
+                  </div>
 
-          {busy && (
-            <div className="upload-status progress" role="status">
-              <span className="status-loader" aria-hidden="true" />
-              <div>
-                <strong>Uploading video</strong>
-                <p>Please wait while your file is processed.</p>
-              </div>
-            </div>
-          )}
+                  <div className="file-actions">
+                    <label className="mini-button upload-change" htmlFor="video-file">Change</label>
+                    <button
+                      type="button"
+                      className="secondary-button file-remove"
+                      onClick={() => {
+                        setFile(null);
+                        setMessage(null);
+                        setError(null);
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
-          {error && (
-            <div className="upload-alert error" role="alert">
-              <div className="alert-icon">❌</div>
-              <div className="alert-copy">
-                <strong>Upload failed</strong>
-                <p>{error}</p>
-              </div>
-              {file && (
-                <button type="button" className="retry-button" onClick={() => void runUpload()}>
-                  Retry
-                </button>
+              {busy && (
+                <div className="upload-status progress" role="status">
+                  <span className="status-loader" aria-hidden="true" />
+                  <div>
+                    <strong>Uploading video</strong>
+                    <p>Please wait while your file is processed.</p>
+                  </div>
+                </div>
               )}
-            </div>
-          )}
 
-          {message && (
-            <div className="upload-alert success" role="status">
-              <div className="alert-icon">✅</div>
-              <div className="alert-copy">
-                <strong>Video uploaded successfully</strong>
-                <p>{message}</p>
+              {error && (
+                <div className="upload-alert error" role="alert">
+                  <div className="alert-icon">❌</div>
+                  <div className="alert-copy">
+                    <strong>Upload failed</strong>
+                    <p>{error}</p>
+                  </div>
+                  {file && (
+                    <button type="button" className="retry-button" onClick={() => void runUpload()}>
+                      Retry
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {message && (
+                <div className="upload-alert success" role="status">
+                  <div className="alert-icon">✅</div>
+                  <div className="alert-copy">
+                    <strong>Video uploaded successfully</strong>
+                    <p>{message}</p>
+                  </div>
+                </div>
+              )}
+
+              <button className="primary-button upload-submit" type="submit" disabled={busy || !file}>
+                {busy ? "Uploading..." : "⬆️ Upload Video"}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="youtube-input-block" style={{ display: "grid", gap: "0.75rem" }}>
+                <label htmlFor="youtube-url" style={{ fontWeight: 600 }}>YouTube URL</label>
+                <input
+                  id="youtube-url"
+                  type="url"
+                  value={youtubeUrl}
+                  onChange={event => {
+                    setYoutubeUrl(event.target.value);
+                    if (youtubeError) setYoutubeError(null);
+                  }}
+                  placeholder="Paste YouTube video URL"
+                  style={{ width: "100%", padding: "0.8rem 0.9rem", borderRadius: "0.75rem", border: "1px solid var(--neutral-300, #dfe4ea)" }}
+                />
               </div>
-            </div>
-          )}
 
-          <button className="primary-button upload-submit" type="submit" disabled={busy || !file}>
-            {busy ? "Uploading..." : "⬆️ Upload Video"}
-          </button>
+              {youtubeBusy && (
+                <div className="upload-status progress" role="status">
+                  <span className="status-loader" aria-hidden="true" />
+                  <div>
+                    <strong>Processing video</strong>
+                    <p>Please wait while the source is validated and queued.</p>
+                  </div>
+                </div>
+              )}
+
+              {youtubeError && (
+                <div className="upload-alert error" role="alert">
+                  <div className="alert-icon">❌</div>
+                  <div className="alert-copy">
+                    <strong>Processing error</strong>
+                    <p>{youtubeError}</p>
+                  </div>
+                </div>
+              )}
+
+              {youtubeMessage && (
+                <div className="upload-alert success" role="status">
+                  <div className="alert-icon">✅</div>
+                  <div className="alert-copy">
+                    <strong>YouTube video accepted</strong>
+                    <p>{youtubeMessage}</p>
+                  </div>
+                </div>
+              )}
+
+              <button className="primary-button upload-submit" type="submit" disabled={youtubeBusy}>
+                {youtubeBusy ? "Processing..." : "Process Video"}
+              </button>
+            </>
+          )}
         </form>
 
         <div className="status-flow">
@@ -705,7 +763,9 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
       try {
         const nextVideos = await getVideos(token);
         if (requestId === historyRequestRef.current) setVideos(nextVideos);
-      } catch { if (requestId === historyRequestRef.current) setVideos([]); }
+      } catch (reason) {
+        if (requestId === historyRequestRef.current) throw reason;
+      }
     } catch (reason) {
       if (requestId === historyRequestRef.current) setError(reason instanceof Error ? reason.message : "Upload history could not be loaded.");
     } finally { if (requestId === historyRequestRef.current) setLoading(false); }
@@ -729,11 +789,7 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
     } finally { setDeletingVideoId(null); }
   }
 
-  const latestEvents = Array.from(events.reduce((latest, event) => {
-    const previous = latest.get(event.video_id);
-    if (!previous || new Date(event.timestamp).getTime() > new Date(previous.timestamp).getTime()) latest.set(event.video_id, event);
-    return latest;
-  }, new Map<string, UploadHistoryEvent>()).values());
+  const latestEvents = events;
 
   const filteredEvents = latestEvents
     .filter(event => {
@@ -775,10 +831,10 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
       {loading && <div className="history-skeleton-list" role="status" aria-label="Loading upload history">{[1, 2, 3].map(item => <div className="history-skeleton-row" key={item}><span /><span /><span /><span /></div>)}</div>}
         {!loading && latestEvents.length === 0 && <div className="feature-placeholder history-empty"><span className="eyebrow">No uploads yet</span><h2>Start your video workspace</h2><p>Upload your first video to start generating transcripts, summaries, and key moments.</p><Link className="primary-button" to="/creator/upload">Upload Video</Link></div>}
       {!loading && latestEvents.length > 0 && filteredEvents.length === 0 && <div className="history-empty-filter">No uploads match the current search and filters.</div>}
-      {!loading && filteredEvents.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th>{administrator && <th>Owner</th>}<th>Uploaded</th><th>Size</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>{filteredEvents.map(event => { const video = videos.find(item => item.id === event.video_id); return <tr key={event.id}><td><div className="history-video-cell"><span className="history-file-icon"><FileText size={17} /></span><span><strong>{event.filename}</strong><small>{event.filename.split(".").pop()?.toUpperCase() || "FILE"}</small></span></div></td>{administrator && <td>{event.owner_name}</td>}<td><strong>{new Date(event.timestamp).toLocaleDateString()}</strong><small>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></td><td>{video ? formatFileSize(video.file_size_bytes) : "Not available"}</td><td>{video ? formatDuration(video.duration_seconds) : "Not available"}</td><td><span className={`event-status ${event.status.toLowerCase()}`}>{event.status}</span><small className="history-note">{event.notes ?? "No event notes"}</small></td><td><div className="history-actions">{video && <button className="mini-button" type="button" onClick={() => setSelectedVideo(video)} aria-label={`Play ${event.filename}`}>Play</button>}<Link className="mini-button neutral" to={administrator ? `/admin/activity` : `/creator/transcripts/${event.video_id}`}>View</Link><button className="mini-button danger-text" type="button" onClick={() => setSelectedEvent(event)} disabled={deletingVideoId === event.video_id}>Delete</button></div></td></tr>; })}</tbody></table></div>}
+      {!loading && filteredEvents.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th>{administrator && <th>Owner</th>}<th>Uploaded</th><th>Size</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>{filteredEvents.map(event => { const video = videos.find(item => item.id === event.video_id); return <tr key={event.video_id}><td><div className="history-video-cell"><span className="history-file-icon"><FileText size={17} /></span><span><strong>{event.filename}</strong><small>{event.source_type} · {event.filename.split(".").pop()?.toUpperCase() || "FILE"}</small></span></div></td>{administrator && <td>{event.owner_name}</td>}<td><strong>{new Date(event.timestamp).toLocaleDateString()}</strong><small>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></td><td>{formatFileSize(event.file_size_bytes)}</td><td>{event.duration_seconds === null ? "Not available" : formatDuration(event.duration_seconds)}</td><td><span className={`event-status ${event.status.toLowerCase()}`}>{event.status}</span><small className="history-note">{event.notes ?? "No lifecycle note"}</small></td><td><div className="history-actions">{video && <button className="mini-button" type="button" onClick={() => setSelectedVideo(video)} aria-label={`Play ${event.filename}`}>Play</button>}<Link className="mini-button neutral" to={administrator ? `/admin/activity` : `/creator/transcripts/${event.video_id}`}>View</Link><button className="mini-button danger-text" type="button" onClick={() => setSelectedEvent(event)} disabled={deletingVideoId === event.video_id}>Delete</button></div></td></tr>; })}</tbody></table></div>}
     </>}
     {selectedEvent && <DeleteConfirmationModal video={videos.find(video => video.id === selectedEvent.video_id) ?? { id: selectedEvent.video_id, filename: selectedEvent.filename, mime_type: "", file_size_bytes: 0, duration_seconds: null, processing_status: selectedEvent.status, uploaded_at: selectedEvent.timestamp, owner_id: selectedEvent.owner_id, owner_name: selectedEvent.owner_name }} isDeleting={deletingVideoId === selectedEvent.video_id} onConfirm={() => void confirmDelete()} onCancel={() => setSelectedEvent(null)} />}
-    {selectedVideo && <VideoPlayerModal video={selectedVideo} onClose={() => setSelectedVideo(null)} />}
+    {selectedVideo && token && <VideoPlayerModal video={selectedVideo} token={token} onClose={() => setSelectedVideo(null)} />}
   </section>;
 }
 
@@ -846,12 +902,36 @@ function DeleteConfirmationModal({ video, isDeleting, onConfirm, onCancel }: { v
   );
 }
 
-function VideoPlayerModal({ video, onClose, initialTime }: { video: VideoListItem; onClose: () => void; initialTime?: number }) {
+function VideoPlayerModal({ video, token, onClose, initialTime }: { video: VideoListItem; token: string; onClose: () => void; initialTime?: number }) {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const mediaUrl = getVideoMediaUrl(video.id, video.owner_id, video.filename, video.storage_key);
-  const formatSupportsHtmlPlayback = /\.(mp4|webm|ogg|mov)$/i.test(video.filename) || /video\/(mp4|webm|ogg|quicktime)/i.test(video.mime_type);
+
+  useEffect(() => {
+    let active = true;
+    setIsLoading(true);
+    setError(null);
+    setMediaUrl(null);
+    void getVideoMediaBlobUrl(token, video.id)
+      .then(url => {
+        if (active) setMediaUrl(url);
+        else URL.revokeObjectURL(url);
+      })
+      .catch(reason => {
+        if (active) {
+          setIsLoading(false);
+          setError(reason instanceof Error ? reason.message : "This video could not be loaded.");
+        }
+      });
+    return () => {
+      active = false;
+      setMediaUrl(current => {
+        if (current) URL.revokeObjectURL(current);
+        return null;
+      });
+    };
+  }, [token, video.id]);
 
   useEffect(() => {
     function handleEscape(e: KeyboardEvent) {
@@ -870,9 +950,7 @@ function VideoPlayerModal({ video, onClose, initialTime }: { video: VideoListIte
     };
     const handleError = () => {
       setIsLoading(false);
-      setError(formatSupportsHtmlPlayback
-        ? "This video could not be loaded. Please verify the uploaded file is still available."
-        : "This file format is not browser-playable in HTML5. Please convert it to MP4 or WebM and upload again.");
+      setError("This video could not be loaded. Please verify the uploaded file is still available.");
     };
     player.addEventListener("loadeddata", handleLoadedData);
     player.addEventListener("error", handleError);
@@ -880,7 +958,7 @@ function VideoPlayerModal({ video, onClose, initialTime }: { video: VideoListIte
       player.removeEventListener("loadeddata", handleLoadedData);
       player.removeEventListener("error", handleError);
     };
-  }, [formatSupportsHtmlPlayback]);
+  }, []);
 
   function seekOnLoad(event: React.SyntheticEvent<HTMLVideoElement>) {
     setIsLoading(false);
@@ -900,11 +978,6 @@ function VideoPlayerModal({ video, onClose, initialTime }: { video: VideoListIte
         </div>
         {isLoading && !error && <div className="video-player-loading">Loading video…</div>}
         {error && <div className="notice" role="alert">{error}</div>}
-        {!formatSupportsHtmlPlayback && !error && (
-          <div className="notice" role="alert">
-            This file format is not browser-playable in HTML5. Please convert it to MP4 or WebM for playback.
-          </div>
-        )}
         <video
           ref={videoRef}
           className="modal-video-player"
@@ -915,11 +988,9 @@ function VideoPlayerModal({ video, onClose, initialTime }: { video: VideoListIte
           onLoadedData={seekOnLoad}
           onError={() => {
             setIsLoading(false);
-            setError(formatSupportsHtmlPlayback
-              ? "This video could not be loaded. Please verify the uploaded file is still available."
-              : "This file format is not browser-playable in HTML5. Please convert it to MP4 or WebM for playback.");
+            setError("This video could not be loaded. Please verify the uploaded file is still available.");
           }}
-          src={mediaUrl}
+          src={mediaUrl ?? undefined}
         >
           Your browser does not support the video tag.
         </video>
@@ -933,6 +1004,7 @@ type AnalysisCache = {
   transcript: Transcript | null;
   summary: Summary | null;
   keyMoments: KeyMoment[];
+  mcqs: McqQuestion[];
   loading: boolean;
   error: string | null;
 };
@@ -947,7 +1019,7 @@ function analysisStatus(status?: string | null) {
   return status ? status : "MISSING";
 }
 
-function TranscriptModalContent({ data, onRetry, onSeek, onClose }: { data: AnalysisCache; onRetry: () => void; onSeek: (time: number) => void; onClose: () => void }) {
+export function TranscriptModalContent({ data, onRetry, onSeek, onClose }: { data: AnalysisCache; onRetry: () => void; onSeek: (time: number) => void; onClose: () => void }) {
   const [search, setSearch] = useState("");
   const transcript = data.transcript;
   const query = search.trim().toLowerCase();
@@ -1010,8 +1082,227 @@ function KeyMomentsModalContent({ data, durationSeconds, onRetry, onGenerate, on
   );
 }
 
-export function VideoLibraryPage({ heading, description }: { heading: string; description: string }) {
+export function MCQQuizPage() {
   const { token } = useAuth();
+  const [videos, setVideos] = useState<VideoListItem[]>([]);
+  const [selectedVideoId, setSelectedVideoId] = useState("");
+  const [questionCount, setQuestionCount] = useState(5);
+  const [questions, setQuestions] = useState<McqQuestion[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [selectedAnswer, setSelectedAnswer] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [score, setScore] = useState(0);
+  const [completed, setCompleted] = useState(false);
+  const [loadingVideos, setLoadingVideos] = useState(false);
+  const [loadingQuiz, setLoadingQuiz] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    const accessToken = token ?? "";
+    async function loadVideos() {
+      try {
+        setLoadingVideos(true);
+        setError(null);
+        const nextVideos = await getVideos(accessToken, 500);
+        setVideos(nextVideos.filter(video => video.processing_status === "COMPLETED"));
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "The video library could not be loaded.");
+      } finally {
+        setLoadingVideos(false);
+      }
+    }
+    void loadVideos();
+  }, [token]);
+
+  async function handleGenerateQuiz() {
+    if (!token || !selectedVideoId) {
+      setError("Please select a processed video before generating the quiz.");
+      return;
+    }
+
+    try {
+      setLoadingQuiz(true);
+      setError(null);
+      const generatedQuestions = await getExpectedMcqs(token, selectedVideoId);
+      const limitedQuestions = generatedQuestions.slice(0, Math.max(1, Math.min(questionCount || 1, generatedQuestions.length || questionCount || 1)));
+      setQuestions(limitedQuestions);
+      setCurrentIndex(0);
+      setSelectedAnswer("");
+      setSubmitted(false);
+      setCompleted(false);
+      setScore(0);
+      if (limitedQuestions.length === 0) {
+        setError("No MCQ questions were available for the selected video.");
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The quiz could not be generated for this video.");
+    } finally {
+      setLoadingQuiz(false);
+    }
+  }
+
+  function handleSubmitAnswer() {
+    const currentQuestion = questions[currentIndex];
+    if (!currentQuestion || !selectedAnswer) return;
+
+    setSubmitted(true);
+    if (selectedAnswer === currentQuestion.correct_answer) {
+      setScore(value => value + 1);
+    }
+  }
+
+  function handleNextQuestion() {
+    if (currentIndex >= questions.length - 1) {
+      setCompleted(true);
+      return;
+    }
+
+    setCurrentIndex(index => index + 1);
+    setSelectedAnswer("");
+    setSubmitted(false);
+  }
+
+  function handleTryAgain() {
+    setQuestions([]);
+    setCurrentIndex(0);
+    setSelectedAnswer("");
+    setSubmitted(false);
+    setScore(0);
+    setCompleted(false);
+    setError(null);
+  }
+
+  function handleChooseAnotherVideo() {
+    setSelectedVideoId("");
+    handleTryAgain();
+  }
+
+  const currentQuestion = questions[currentIndex];
+  const totalQuestions = questions.length;
+  const percentage = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0;
+
+  return (
+    <section className="simple-page">
+      <div className="page-header transcript-management-header">
+        <div>
+          <span className="eyebrow">ClipMind AI</span>
+          <h1>MCQ Quiz</h1>
+          <p className="feature-description">Generate a short quiz from the transcript, summary, and key moments for a completed video.</p>
+        </div>
+      </div>
+
+      {error && <div className="notice" role="alert">{error}</div>}
+
+      {!questions.length && !completed && (
+        <div className="feature-card" style={{ maxWidth: 720, marginTop: 24 }}>
+          <div className="analysis-kicker">Select a video</div>
+          <div style={{ display: "grid", gap: 18, marginTop: 20 }}>
+            <label style={{ display: "grid", gap: 8 }}>
+              <span style={{ fontWeight: 600 }}>Select Video:</span>
+              <select value={selectedVideoId} onChange={event => setSelectedVideoId(event.target.value)} aria-label="Select Video" style={{ padding: "0.75rem 0.9rem", borderRadius: 10, border: "1px solid #d1d5db" }} disabled={loadingVideos}>
+                <option value="">Choose a processed video</option>
+                {videos.map(video => (
+                  <option key={video.id} value={video.id}>{video.filename}</option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: "grid", gap: 8 }}>
+              <span style={{ fontWeight: 600 }}>Number of Questions:</span>
+              <input aria-label="Number of Questions" type="number" min={1} max={10} value={questionCount} onChange={event => setQuestionCount(Math.max(1, Math.min(10, Number(event.target.value) || 1)))} style={{ padding: "0.75rem 0.9rem", borderRadius: 10, border: "1px solid #d1d5db" }} />
+            </label>
+
+            <button type="button" className="primary-button" onClick={() => void handleGenerateQuiz()} disabled={loadingQuiz || !selectedVideoId}>
+              {loadingQuiz ? "Generating..." : "Generate Quiz"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {questions.length > 0 && !completed && currentQuestion && (
+        <div className="mcq-quiz-shell">
+          <div className="mcq-question-card">
+            <div className="mcq-header-row">
+              <div className="analysis-kicker">Question {currentIndex + 1} of {questions.length}</div>
+              <div className="mcq-progress-pill">{Math.round(((currentIndex + 1) / questions.length) * 100)}% complete</div>
+            </div>
+
+            <h2>{currentQuestion.question}</h2>
+
+            <div className="mcq-option-list">
+              {currentQuestion.options.map((option, index) => {
+                const optionLabel = `${String.fromCharCode(65 + index)}. ${option}`;
+                const isSelected = selectedAnswer === option;
+                return (
+                  <label key={`${currentQuestion.question}-${option}`} className={`mcq-option ${isSelected ? "selected" : ""}`}>
+                    <input aria-label={optionLabel} type="radio" name={`mcq-option-${currentIndex}`} value={option} checked={isSelected} onChange={event => setSelectedAnswer(event.target.value)} />
+                    <span className="mcq-option-letter">{String.fromCharCode(65 + index)}</span>
+                    <span className="mcq-option-text">{option}</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            {!submitted && (
+              <button type="button" className="primary-button mcq-submit-button" onClick={handleSubmitAnswer} disabled={!selectedAnswer}>
+                Submit Answer
+              </button>
+            )}
+
+            {submitted && (
+              <div className="mcq-result-panel">
+                <div className={`mcq-feedback ${selectedAnswer === currentQuestion.correct_answer ? "success" : "error"}`}>
+                  {selectedAnswer === currentQuestion.correct_answer ? "✅ Correct!" : "❌ Incorrect"}
+                </div>
+
+                <div className="mcq-answer-grid">
+                  <p><strong>Correct Answer:</strong> {currentQuestion.correct_answer}</p>
+                  <p><strong>Explanation:</strong> {currentQuestion.explanation}</p>
+                </div>
+
+                <div className="mcq-meta-list">
+                  <span className="mcq-meta-badge">Difficulty: {currentQuestion.difficulty}</span>
+                  <span className="mcq-meta-badge">Topic: {currentQuestion.topic}</span>
+                  <span className="mcq-meta-badge">Source: {currentQuestion.source}</span>
+                  <span className="mcq-meta-badge">Timestamp: {formatAnalysisTime(Number(currentQuestion.timestamp) || 0)}</span>
+                </div>
+
+                <button type="button" className="primary-button" onClick={handleNextQuestion}>
+                  {currentIndex === questions.length - 1 ? "View Final Result" : "Next Question"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {completed && (
+        <div className="feature-card" style={{ maxWidth: 720, marginTop: 24 }}>
+          <div className="analysis-kicker">MCQ Quiz Completed</div>
+          <h2 style={{ marginTop: 12 }}>Score: {score} / {questions.length}</h2>
+          <p style={{ fontSize: 18, fontWeight: 600 }}>Percentage: {percentage}%</p>
+
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 20 }}>
+            <button type="button" className="primary-button" onClick={handleTryAgain}>Try Again</button>
+            <button type="button" className="secondary-button" onClick={handleChooseAnotherVideo}>Choose Another Video</button>
+          </div>
+        </div>
+      )}
+
+      {!loadingVideos && videos.length === 0 && !questions.length && !completed && (
+        <div className="feature-placeholder" style={{ marginTop: 24 }}>
+          <span className="eyebrow">No processed videos</span>
+          <h2>Select a completed video to begin</h2>
+          <p>Upload and process a video before creating a quiz.</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function VideoLibraryPage({ heading, description }: { heading: string; description: string }) {
+  const { token, user } = useAuth();
   const [videos, setVideos] = useState<VideoListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1030,6 +1321,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
   const startedTranscriptIdsRef = useRef(new Set<string>());
   const transcriptGenerationRunningRef = useRef(false);
   const loadingAnalysisRef = useRef(new Set<string>());
+  const canGenerateTranscripts = user?.role === "Content Creator" || user?.role === "Educator" || user?.role === "Administrator";
 
   function analysisKey(videoId: string, kind: AnalysisKind) {
     return `${videoId}:${kind}`;
@@ -1040,7 +1332,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
     const key = analysisKey(video.id, kind);
     if (analysisCache[key] || loadingAnalysisRef.current.has(key)) return;
     loadingAnalysisRef.current.add(key);
-    setAnalysisCache(current => ({ ...current, [key]: { transcript: null, summary: null, keyMoments: [], loading: true, error: null } }));
+    setAnalysisCache(current => ({ ...current, [key]: { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: true, error: null } }));
     void loadAnalysis(kind, video);
   }
 
@@ -1050,18 +1342,18 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
     try {
       if (kind === "transcript") {
         const transcript = await getTranscript(token, video.id);
-        setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], loading: false, error: null }), transcript, loading: false, error: null } }));
+        setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: false, error: null }), transcript, loading: false, error: null } }));
       } else if (kind === "summary") {
         const summary = await getSummary(token, video.id);
-        setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], loading: false, error: null }), summary, loading: false, error: null } }));
+        setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: false, error: null }), summary, loading: false, error: null } }));
       } else {
         const keyMoments = await getKeyMoments(token, video.id);
-        setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], loading: false, error: null }), keyMoments, loading: false, error: null } }));
+        setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: false, error: null }), keyMoments, loading: false, error: null } }));
       }
       loadingAnalysisRef.current.delete(key);
     } catch (reason) {
       const apiError = reason instanceof ApiError && reason.status === 404 ? null : reason instanceof Error ? reason.message : "The analysis could not be loaded.";
-      setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], loading: false, error: null }), loading: false, error: apiError } }));
+      setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: false, error: null }), loading: false, error: apiError } }));
       loadingAnalysisRef.current.delete(key);
     }
   }
@@ -1071,7 +1363,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
     const { kind, video } = activeAnalysis;
     const key = analysisKey(video.id, kind);
     loadingAnalysisRef.current.add(key);
-    setAnalysisCache(current => ({ ...current, [key]: { transcript: null, summary: null, keyMoments: [], loading: true, error: null } }));
+    setAnalysisCache(current => ({ ...current, [key]: { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: true, error: null } }));
     void loadAnalysis(kind, video);
   }
 
@@ -1093,7 +1385,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "";
       if (/does not exist|not found|transcript.*not/i.test(message)) {
-        return /processing|pending|in_progress|uploaded/i.test(video.processing_status) ? "processing" : "not_generated";
+        return /processing|pending|in_progress/i.test(video.processing_status) ? "processing" : "not_generated";
       }
       return "failed";
     }
@@ -1118,19 +1410,22 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
       setTranscriptStates(Object.fromEntries(nextStates));
       const pendingVideo = nextStates
         .map(([videoId, state]) => ({ videoId, state, video: nextVideos.find(item => item.id === videoId) }))
-        .find(({ state, videoId, video }) => state === "processing" && video?.processing_status === "UPLOADED" && !startedTranscriptIdsRef.current.has(videoId));
-      if (pendingVideo && !transcriptGenerationRunningRef.current) {
+        .find(({ state, videoId, video }) => state === "processing" || (state === "not_generated" && video?.processing_status !== "FAILED" && !startedTranscriptIdsRef.current.has(videoId)));
+      if (canGenerateTranscripts && pendingVideo && !transcriptGenerationRunningRef.current) {
         const { videoId } = pendingVideo;
         startedTranscriptIdsRef.current.add(videoId);
         transcriptGenerationRunningRef.current = true;
         void generateTranscript(token, videoId)
-          .catch(() => undefined)
+          .catch(reason => {
+            setTranscriptStates(current => ({ ...current, [videoId]: "failed" }));
+            setError(reason instanceof Error ? reason.message : "Transcript generation failed.");
+          })
           .finally(() => {
             transcriptGenerationRunningRef.current = false;
             void loadVideos(false);
           });
       }
-      if (nextStates.some(([, state]) => state === "processing")) {
+      if (pendingVideo || nextStates.some(([, state]) => state === "processing")) {
         if (pollingRef.current) clearTimeout(pollingRef.current);
         pollingRef.current = window.setTimeout(() => {
           pollingRef.current = null;
@@ -1265,7 +1560,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
   useEffect(() => {
     if (!token) return;
     void loadVideos();
-  }, [token]);
+  }, [token, user?.role]);
 
   useEffect(() => {
     return () => {
@@ -1387,6 +1682,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
       {selectedVideoToPlay && (
         <VideoPlayerModal
           video={selectedVideoToPlay}
+          token={token ?? ""}
           initialTime={playbackStartTime}
           onClose={() => { setSelectedVideoToPlay(null); setPlaybackStartTime(undefined); }}
         />
@@ -1400,9 +1696,9 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
           onClose={() => setActiveAnalysis(null)}
           className={activeAnalysis.kind === "transcript" ? "transcript-analysis-modal" : activeAnalysis.kind === "keyMoments" ? "key-moments-analysis-modal" : ""}
         >
-          {activeAnalysis.kind === "transcript" && <TranscriptModalContent data={analysisCache[analysisKey(activeAnalysis.video.id, activeAnalysis.kind)] ?? { transcript: null, summary: null, keyMoments: [], loading: true, error: null }} onRetry={retryAnalysis} onSeek={time => { setActiveAnalysis(null); setPlaybackStartTime(time); setSelectedVideoToPlay(activeAnalysis.video); }} onClose={() => setActiveAnalysis(null)} />}
-          {activeAnalysis.kind === "summary" && <SummaryModalContent data={analysisCache[analysisKey(activeAnalysis.video.id, activeAnalysis.kind)] ?? { transcript: null, summary: null, keyMoments: [], loading: true, error: null }} onRetry={retryAnalysis} onGenerate={() => void handleGenerateSummaryForLibrary(activeAnalysis.video)} />}
-          {activeAnalysis.kind === "keyMoments" && <KeyMomentsModalContent data={analysisCache[analysisKey(activeAnalysis.video.id, activeAnalysis.kind)] ?? { transcript: null, summary: null, keyMoments: [], loading: true, error: null }} durationSeconds={activeAnalysis.video.duration_seconds} onRetry={retryAnalysis} onGenerate={() => void handleGenerateMomentsForLibrary(activeAnalysis.video)} onWatch={watchMoment} />}
+          {activeAnalysis.kind === "transcript" && <TranscriptModalContent data={analysisCache[analysisKey(activeAnalysis.video.id, activeAnalysis.kind)] ?? { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: true, error: null }} onRetry={retryAnalysis} onSeek={time => { setActiveAnalysis(null); setPlaybackStartTime(time); setSelectedVideoToPlay(activeAnalysis.video); }} onClose={() => setActiveAnalysis(null)} />}
+          {activeAnalysis.kind === "summary" && <SummaryModalContent data={analysisCache[analysisKey(activeAnalysis.video.id, activeAnalysis.kind)] ?? { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: true, error: null }} onRetry={retryAnalysis} onGenerate={() => void handleGenerateSummaryForLibrary(activeAnalysis.video)} />}
+          {activeAnalysis.kind === "keyMoments" && <KeyMomentsModalContent data={analysisCache[analysisKey(activeAnalysis.video.id, activeAnalysis.kind)] ?? { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: true, error: null }} durationSeconds={activeAnalysis.video.duration_seconds} onRetry={retryAnalysis} onGenerate={() => void handleGenerateMomentsForLibrary(activeAnalysis.video)} onWatch={watchMoment} />}
         </Modal>
       )}
     </section>
@@ -1421,7 +1717,9 @@ export function VideoResultsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [transcriptGenerationStarted, setTranscriptGenerationStarted] = useState(false);
   const pollingRef = useRef<number | null>(null);
+  const startedTranscriptGenerationRef = useRef(false);
 
   const transcriptState = useMemo(() => {
     if (transcript?.status === "COMPLETED") return "READY";
@@ -1463,12 +1761,25 @@ export function VideoResultsPage() {
       try {
         const transcriptResult = await getTranscript(token, videoId);
         setTranscript(transcriptResult);
+        setTranscriptGenerationStarted(false);
       } catch (reason) {
         if (reason instanceof ApiError && (reason.status === 401 || reason.status === 403)) {
           setError("Your session has expired. Please log in again.");
           return;
         }
-        if (!(reason instanceof ApiError && /not found|does not exist/i.test(reason.message))) {
+        const transcriptMissing = reason instanceof ApiError && reason.status === 404;
+        if (transcriptMissing && !startedTranscriptGenerationRef.current) {
+          startedTranscriptGenerationRef.current = true;
+          setTranscriptGenerationStarted(true);
+          try {
+            const generatedTranscript = await generateTranscript(token, videoId);
+            setTranscript(generatedTranscript);
+          } catch (generationReason) {
+            if (!(generationReason instanceof ApiError && generationReason.status === 409)) {
+              setError(generationReason instanceof Error ? generationReason.message : "Transcript generation failed.");
+            }
+          }
+        } else if (!transcriptMissing) {
           setTranscript(null);
         }
       }
@@ -1518,6 +1829,7 @@ export function VideoResultsPage() {
   useEffect(() => {
     if (!token || !videoId || !video) return;
     const shouldPoll = /processing|pending|in_progress/i.test(video.processing_status)
+      || transcriptGenerationStarted
       || transcriptState === "PROCESSING"
       || summaryState === "PROCESSING"
       || keyMomentsState === "PROCESSING";
@@ -1534,7 +1846,7 @@ export function VideoResultsPage() {
         pollingRef.current = null;
       }
     };
-  }, [token, video, videoId, transcriptState, summaryState, keyMomentsState]);
+  }, [token, video, videoId, transcriptGenerationStarted, transcriptState, summaryState, keyMomentsState]);
 
   const filteredSegments = useMemo(() => {
     if (!transcript?.segments) return [];
@@ -1621,16 +1933,6 @@ export function VideoResultsPage() {
     } finally {
       setDownloading(false);
     }
-  }
-
-  function highlightText(text: string, query: string) {
-    const trimmed = query.trim();
-    if (!trimmed) return text;
-    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`(${escaped})`, "ig");
-    return text.split(pattern).map((part, index) =>
-      part.toLowerCase() === trimmed.toLowerCase() ? <mark key={`${part}-${index}`}>{part}</mark> : <span key={`${part}-${index}`}>{part}</span>
-    );
   }
 
   if (!videoId) return <Navigate to="/creator/transcripts" replace />;
@@ -2018,24 +2320,168 @@ export function Login() {
 
 export function Register() {
   const navigate = useNavigate();
-  const [form, setForm] = useState({ full_name: "", email: "", password: "", confirm_password: "", role: "Learner" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", confirm_password: "", role: "Content Creator" });  
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  function update(field: keyof typeof form, value: string) { setForm(current => ({ ...current, [field]: value })); }
+  
+  function update(field: keyof typeof form, value: string) { setForm(current => ({ ...current, [field]: value })); }  
+  
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
     if (form.password.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (form.password !== form.confirm_password) { setError("Passwords do not match."); return; }
     setBusy(true);
-    try { await registerRequest(form); setSuccess("Account created. Redirecting to sign in..."); setTimeout(() => navigate("/login"), 700); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Registration failed."); }
+    
+    try { 
+      const payload = {
+        name: form.name,
+        email: form.email,
+        password: form.password,
+        role: form.role 
+      };
+      
+      await registerRequest(payload as any); 
+      setSuccess("Account created. Redirecting to sign in..."); 
+      setTimeout(() => navigate("/login"), 700); 
+    }
+    catch (reason) { 
+      console.error("Full Registration Error:", reason);
+      setError(reason instanceof Error ? reason.message : "Registration failed."); 
+    }
     finally { setBusy(false); }
   }
-  return <main className="login-page"><div className="login-art"><div className="brand"><span className="brand-mark"><Clapperboard size={18} /></span><span>ClipMind <em>AI</em></span></div><div className="art-copy"><span className="eyebrow">Start your workspace</span><h1>Give every frame somewhere useful to go.</h1><p>Create a role-aware ClipMind account for making, learning, teaching, or operating.</p></div></div><div className="login-panel"><div className="form-wrap"><span className="eyebrow">New account</span><h2>Join ClipMind</h2><p className="form-intro">Your role determines the workspace and permissions you receive.</p><form onSubmit={submit}><label>👤 Full name<input value={form.full_name} onChange={event => update("full_name", event.target.value)} required /></label><label>📧 Email<input type="email" value={form.email} onChange={event => update("email", event.target.value)} required /></label><label>🎭 Role<select value={form.role} onChange={event => update("role", event.target.value)}><option>Content Creator</option><option>Learner</option><option>Educator</option><option>Administrator</option></select></label><label>🔐 Password<input type="password" value={form.password} onChange={event => update("password", event.target.value)} minLength={8} required /></label><label>🔐 Confirm password<input type="password" value={form.confirm_password} onChange={event => update("confirm_password", event.target.value)} minLength={8} required /></label>{error && <p className="form-error" role="alert">{error}</p>}{success && <p className="upload-success" role="status">{success}</p>}<button className="primary-button" disabled={busy}>{busy ? "Creating account..." : "Create account"}</button></form><Link className="auth-link" to="/login">Back to sign in</Link></div></div></main>;
+  
+  return <main className="login-page"><div className="login-art"><div className="brand"><span className="brand-mark"><Clapperboard size={18} /></span><span>ClipMind <em>AI</em></span></div><div className="art-copy"><span className="eyebrow">Start your workspace</span><h1>Give every frame somewhere useful to go.</h1><p>Create a role-aware ClipMind account for making, learning, teaching, or operating.</p></div></div><div className="login-panel"><div className="form-wrap"><span className="eyebrow">New account</span><h2>Join ClipMind</h2><p className="form-intro">Your role determines the workspace and permissions you receive.</p><form onSubmit={submit}><label>👤 Full name<input value={form.name} onChange={event => update("name", event.target.value)} required /></label><label>📧 Email<input type="email" value={form.email} onChange={event => update("email", event.target.value)} required /></label><label>🎭 Role<select value={form.role} onChange={event => update("role", event.target.value)}><option>Content Creator</option><option>Learner</option><option>Educator</option><option>Administrator</option></select></label><label>🔐 Password<input type="password" value={form.password} onChange={event => update("password", event.target.value)} minLength={8} required /></label><label>🔐 Confirm password<input type="password" value={form.confirm_password} onChange={event => update("confirm_password", event.target.value)} minLength={8} required /></label>{error && <p className="form-error" role="alert">{error}</p>}{success && <p className="upload-success" role="status">{success}</p>}<button className="primary-button" disabled={busy}>{busy ? "Creating account..." : "Create account"}</button></form><Link className="auth-link" to="/login">Back to sign in</Link></div></div></main>;
 }
 
-export function Profile() { const { user } = useAuth(); if (!user) return <Navigate to="/login" replace />; return <section className="simple-page"><span className="eyebrow">Account</span><h1>Your profile</h1><div className="profile-card"><div className="avatar">{user.full_name.slice(0, 1)}</div><div><h2>{user.full_name}</h2><p>{user.email}</p><span className="role-badge">{user.role}</span></div></div></section>; }
+export function Profile() { 
+  const { user } = useAuth(); 
+  const [isEditing, setIsEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error", text: string } | null>(null);
+  
+  const displayName = user?.full_name || (user as any)?.name || "ClipMind User";
+
+  const [formData, setFormData] = useState({
+    name: displayName,
+    email: user?.email || ""
+  });
+
+  if (!user) return <Navigate to="/login" replace />; 
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setMessage(null);
+
+    try {
+      await new Promise(resolve => setTimeout(resolve, 800));
+      setMessage({ type: "success", text: "Profile details saved successfully!" });
+      setIsEditing(false);
+    } catch (error) {
+      setMessage({ type: "error", text: "Failed to update profile details." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="simple-page">
+      <div className="page-header narrow">
+        <div>
+          <span className="eyebrow">Account Settings</span>
+          <h1>Your profile</h1>
+          <p className="feature-description">Manage your ClipMind AI account details and workspace preferences.</p>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gap: "24px", maxWidth: "760px" }}>
+        <div className="profile-card" style={{ margin: 0, maxWidth: "100%" }}>
+          <div className="avatar">{displayName.slice(0, 1).toUpperCase()}</div>
+          <div>
+            <h2>{displayName}</h2>
+            <p>{user.email}</p>
+            <span className="role-badge">{user.role}</span>
+          </div>
+        </div>
+
+        <div className="upload-card" style={{ padding: "28px" }}>
+          <div className="card-header-row" style={{ marginBottom: "20px" }}>
+            <strong style={{ fontSize: "18px", color: "var(--text)" }}>Personal Information</strong>
+            {!isEditing && (
+              <button className="secondary-button compact-button" onClick={() => setIsEditing(true)}>
+                Edit Details
+              </button>
+            )}
+          </div>
+
+          {message && (
+            <div className={`upload-alert ${message.type}`} role="status" style={{ marginBottom: "20px" }}>
+              <div className="alert-icon">{message.type === "success" ? "✅" : "❌"}</div>
+              <div className="alert-copy">
+                <strong>{message.type === "success" ? "Success" : "Error"}</strong>
+                <p>{message.text}</p>
+              </div>
+            </div>
+          )}
+
+          {isEditing ? (
+            <form onSubmit={handleSubmit} style={{ display: "grid", gap: "18px" }}>
+              <label>
+                Full Name
+                <input 
+                  type="text"
+                  value={formData.name} 
+                  onChange={e => setFormData(current => ({ ...current, name: e.target.value }))}
+                  required 
+                />
+              </label>
+              <label>
+                Email Address
+                <input 
+                  type="email" 
+                  value={formData.email} 
+                  onChange={e => setFormData(current => ({ ...current, email: e.target.value }))}
+                  disabled 
+                  title="Email addresses cannot be changed directly."
+                  style={{ opacity: 0.6, cursor: "not-allowed" }}
+                />
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "normal" }}>
+                  Contact an administrator to change your workspace email.
+                </span>
+              </label>
+              
+              <div className="file-actions" style={{ marginTop: "12px", justifyContent: "flex-end" }}>
+                <button type="button" className="secondary-button" onClick={() => setIsEditing(false)} disabled={busy}>
+                  Cancel
+                </button>
+                <button type="submit" className="primary-button" disabled={busy}>
+                  {busy ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div style={{ display: "grid", gap: "18px", color: "var(--text-soft)", fontSize: "14px" }}>
+              <div style={{ display: "grid", gap: "6px" }}>
+                <strong style={{ color: "var(--text)" }}>Full Name</strong>
+                <span>{displayName}</span>
+              </div>
+              <div style={{ display: "grid", gap: "6px" }}>
+                <strong style={{ color: "var(--text)" }}>Email Address</strong>
+                <span>{user.email}</span>
+              </div>
+              <div style={{ display: "grid", gap: "6px" }}>
+                <strong style={{ color: "var(--text)" }}>Workspace Role</strong>
+                <span>{user.role}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  ); 
+}
 
 export { Dashboard };

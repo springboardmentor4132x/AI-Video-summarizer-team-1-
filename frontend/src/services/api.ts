@@ -7,7 +7,16 @@ export interface VideoUploadResponse {
   mime_type: string;
   file_size_bytes: number;
   processing_status: string;
+  source_type?: "UPLOAD" | "YOUTUBE";
+  source_url?: string | null;
   uploaded_at: string;
+}
+
+export interface YouTubeVideoResponse {
+  video_id: string;
+  source_type: "YOUTUBE";
+  source_url: string;
+  status: string;
 }
 
 export interface UploadHistoryEvent {
@@ -19,6 +28,10 @@ export interface UploadHistoryEvent {
   status: string;
   timestamp: string;
   notes: string | null;
+  mime_type: string;
+  file_size_bytes: number;
+  duration_seconds: number | null;
+  source_type: "UPLOAD" | "YOUTUBE";
 }
 
 export interface VideoStatus {
@@ -36,6 +49,8 @@ export interface VideoListItem {
   file_size_bytes: number;
   duration_seconds: number | null;
   processing_status: string;
+  source_type?: "UPLOAD" | "YOUTUBE";
+  source_url?: string | null;
   uploaded_at: string;
   owner_id: string;
   owner_name: string;
@@ -85,6 +100,17 @@ export interface KeyMoment {
   importance_score: number;
   transcript_text: string;
   created_at: string;
+}
+
+export interface McqQuestion {
+  question: string;
+  options: string[];
+  correct_answer: string;
+  explanation: string;
+  difficulty: "Easy" | "Medium" | "Hard";
+  topic: string;
+  source: "Transcript" | "Summary" | "Key Moment";
+  timestamp: number | string | null;
 }
 
 export interface AnalyticsRange {
@@ -284,6 +310,18 @@ export function getVideoMediaUrl(videoId: string, userId: string, filename: stri
   return `${API_URL}/media/videos/${userId}/${videoId}${suffix}`;
 }
 
+export async function getVideoMediaBlobUrl(token: string, videoId: string) {
+  ensureValidAuthorization(token);
+  const response = await fetch(`${API_URL}/videos/${videoId}/media`, {
+    headers: getAuthHeaders(token),
+  });
+  if (!response.ok) {
+    const message = await responseError(response, "Video playback could not be loaded.");
+    throw new ApiError(response.status, message);
+  }
+  return URL.createObjectURL(await response.blob());
+}
+
 export function getAuthHeaders(token?: string | null): Record<string, string> {
   const candidate = token?.trim();
   if (!candidate || INVALID_TOKEN_VALUES.has(candidate.toLowerCase())) {
@@ -325,17 +363,30 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
   let response: Response;
+  const requestUrl = `${API_URL}${path}`;
+  if (import.meta.env.DEV) {
+    console.debug(`[ClipMind API] ${options.method ?? "GET"} ${requestUrl}`);
+  }
   try {
-    response = await fetch(`${API_URL}${path}`, { ...options, headers });
+    response = await fetch(requestUrl, { ...options, headers });
   } catch (reason) {
-    const detail = reason instanceof Error ? reason.message : "The request could not be sent.";
-    if (/Failed to fetch|fetch/i.test(detail) || /network|connection/i.test(detail)) {
-      throw new ApiError(0, "Cannot connect to the ClipMind AI backend.");
+    if (import.meta.env.DEV) {
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      console.error(`[ClipMind API] network failure ${requestUrl}`, { name: error.name, message: error.message });
     }
-    throw new ApiError(0, "Cannot connect to the ClipMind AI backend.");
+    throw new ApiError(
+      0,
+      "Cannot connect to the ClipMind AI backend. Check that the frontend is opened from the configured local address and that the backend is reachable.",
+    );
+  }
+  if (import.meta.env.DEV) {
+    console.debug(`[ClipMind API] response ${response.status} ${requestUrl}`);
   }
   if (!response.ok) {
     const message = await responseError(response, `Request failed (${response.status})`);
+    if (import.meta.env.DEV) {
+      console.warn(`[ClipMind API] HTTP error ${response.status} ${requestUrl}`, { body: message });
+    }
     if (response.status === 401) {
       if (path === "/auth/login") {
         throw new ApiError(401, "Invalid email or password.");
@@ -415,6 +466,15 @@ export function uploadVideo(token: string, file: File) {
   });
 }
 
+export function processYouTubeVideo(token: string, youtubeUrl: string) {
+  ensureValidAuthorization(token);
+  return request<YouTubeVideoResponse>("/videos/youtube", {
+    method: "POST",
+    headers: getAuthHeaders(token),
+    body: JSON.stringify({ youtube_url: youtubeUrl }),
+  });
+}
+
 export function getUploadHistory(token: string, administrator = false) {
   ensureValidAuthorization(token);
   return request<UploadHistoryEvent[]>(administrator ? "/admin/upload-history" : "/videos/history", {
@@ -422,16 +482,18 @@ export function getUploadHistory(token: string, administrator = false) {
   });
 }
 
-export function getVideoStatuses(token: string) {
+export function getVideoStatuses(token: string, limit = 500) {
   ensureValidAuthorization(token);
-  return request<VideoStatus[]>("/videos/status", {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return request<VideoStatus[]>(`/videos/status?${params.toString()}`, {
     headers: getAuthHeaders(token),
   });
 }
 
-export function getVideos(token: string) {
+export function getVideos(token: string, limit = 500) {
   ensureValidAuthorization(token);
-  return request<VideoListItem[]>("/videos/", {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return request<VideoListItem[]>(`/videos/?${params.toString()}`, {
     headers: getAuthHeaders(token),
   });
 }
@@ -495,6 +557,13 @@ export function retrySummary(token: string, videoId: string) {
 export function getKeyMoments(token: string, videoId: string) {
   ensureValidAuthorization(token);
   return request<KeyMoment[]>(`/videos/${videoId}/key-moments`, {
+    headers: getAuthHeaders(token),
+  });
+}
+
+export function getExpectedMcqs(token: string, videoId: string) {
+  ensureValidAuthorization(token);
+  return request<McqQuestion[]>(`/videos/${videoId}/mcqs`, {
     headers: getAuthHeaders(token),
   });
 }
