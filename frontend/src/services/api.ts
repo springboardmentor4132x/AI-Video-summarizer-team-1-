@@ -1,4 +1,4 @@
-import type { CurrentUser, LoginResponse } from "../types/auth";
+import type { CurrentUser, LoginResponse, Role } from "../types/auth";
 import { API_BASE_URL, withApiBase } from "../config";
 
 export interface VideoUploadResponse {
@@ -423,17 +423,22 @@ export function login(email: string, password: string) {
 }
 
 export function register(payload: RegistrationPayload) {
-  return request<{ id: string; email: string; role: string }>("/auth/register", {
+  return request<{ id: number; name: string; email: string; role: Role; created_at: string }>("/auth/register", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      name: payload.full_name.trim(),
+      email: payload.email.trim(),
+      password: payload.password,
+      role: payload.role,
+    }),
   });
 }
 
 export function getCurrentUser(token: string) {
   ensureValidAuthorization(token);
-  return request<CurrentUser>("/auth/me", {
+  return request<Omit<CurrentUser, "full_name"> & { full_name?: string }>("/auth/me", {
     headers: getAuthHeaders(token),
-  });
+  }).then(user => ({ ...user, full_name: user.full_name ?? user.name }));
 }
 
 function analyticsPath(path: string, range?: AnalyticsRange) {
