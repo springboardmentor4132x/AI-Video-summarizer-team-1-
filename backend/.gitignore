@@ -1,3 +1,19 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
 .pytest_tmp/
+venv/
+.venv/
+# Environment Variables
+.env
+.env.*
+!.env.example
+# Test databases
+*.sqlite
+*.db
+# Logs
+*.log
+register_test.py
+scripts/

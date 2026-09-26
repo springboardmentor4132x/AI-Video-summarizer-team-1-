@@ -113,7 +113,7 @@ export function TranscriptPanel({ videoId, filename, transcriptOnly = false, tra
   const canGenerate = canEdit;
   const currentTranscript = transcriptVideoId === Number(videoId) ? transcript : null;
   const currentSummary = summaryVideoId === Number(videoId)
-    && currentTranscript?.id === summary?.transcript_id
+    && Number(currentTranscript?.id) === Number(summary?.transcript_id)
     ? summary
     : null;
   const summaryStatus = summaryRunStatus ?? currentSummary?.status ?? "NOT_STARTED";
@@ -172,7 +172,7 @@ export function TranscriptPanel({ videoId, filename, transcriptOnly = false, tra
     getTranscript(token, videoId)
       .then(result => {
         if (active) {
-          if (result.video_id !== requestedVideoId) {
+          if (Number(result.video_id) !== requestedVideoId) {
             setError("The transcript returned does not belong to this video.");
           } else {
             setTranscript(result);

@@ -11,20 +11,15 @@ from app.routers.analytics import router as analytics_router
 
 app = FastAPI(title="ClipMind AI")
 
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# Include application routers
+# Keep the authenticated full processing pipeline and role-specific API routers.
 app.include_router(auth_router)
 app.include_router(video_router)
 app.include_router(key_moment_router)

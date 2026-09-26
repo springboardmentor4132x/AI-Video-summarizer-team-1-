@@ -246,12 +246,12 @@ describe("AnalyticsPage", () => {
 
     expect(screen.getByText("Videos analyzed")).toBeTruthy();
     expect(screen.getAllByText("5").length).toBeGreaterThan(0);
-    expect(screen.getByText("Transcripts")).toBeTruthy();
+    expect(screen.getByText("Transcripts", { selector: ".analytics-metric-label" })).toBeTruthy();
     expect(screen.getAllByText("4").length).toBeGreaterThan(0);
-    expect(screen.getByText("AI summaries")).toBeTruthy();
-    expect(screen.getByText("Key moments")).toBeTruthy();
+    expect(screen.getByText("AI summaries", { selector: ".analytics-metric-label" })).toBeTruthy();
+    expect(screen.getByText("Key moments", { selector: ".analytics-metric-label" })).toBeTruthy();
     expect(screen.getAllByText("12").length).toBeGreaterThan(0);
-    expect(screen.getByText("test_demo.mp4")).toBeTruthy();
+    expect(screen.getByText("test_demo.mp4", { selector: ".video-intelligence-table strong" })).toBeTruthy();
   });
 
   it("counts completed summaries in the AI summaries metric", async () => {
@@ -263,9 +263,9 @@ describe("AnalyticsPage", () => {
 
     render(<MemoryRouter><AnalyticsPage /></MemoryRouter>);
 
-    await waitFor(() => expect(screen.getByText("AI summaries")).toBeTruthy());
-    const metric = screen.getByText("AI summaries").closest(".analytics-metric-card");
-    expect(metric?.querySelector(".metric-value")?.textContent).toBe("3");
+    await waitFor(() => expect(screen.getByText("AI summaries", { selector: ".analytics-metric-label" })).toBeTruthy());
+    const metric = screen.getByText("AI summaries", { selector: ".analytics-metric-label" }).closest(".analytics-metric");
+    expect(metric?.querySelector("strong")?.textContent).toBe("3");
   });
 
   it("handles API failure gracefully with clear error and retry button without fake zero metrics", async () => {
@@ -297,10 +297,10 @@ describe("AnalyticsPage", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("test_demo.mp4")).toBeTruthy();
+      expect(screen.getByText("test_demo.mp4", { selector: ".video-intelligence-table strong" })).toBeTruthy();
     });
 
-    await user.click(screen.getByText("test_demo.mp4"));
+    await user.click(screen.getByText("test_demo.mp4", { selector: ".video-intelligence-table strong" }).closest("tr")!);
 
     expect(screen.getByRole("dialog", { name: /test_demo\.mp4 intelligence details/i })).toBeTruthy();
     expect(screen.getByText("Video overview")).toBeTruthy();

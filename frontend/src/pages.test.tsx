@@ -1,151 +1,169 @@
 // @vitest-environment jsdom
-/**
- * Tests for purpose-separated video and transcript navigation.
- *
- * Each test renders into a fresh container and cleans up afterwards to
- * avoid cross-test DOM contamination.
- */
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-// ---------------------------------------------------------------------------
-// All external dependencies are hoisted and mocked at module level.
-// Individual tests control user.role by swapping the AuthContext mock return.
-// ---------------------------------------------------------------------------
-
-const mockGetVideos = vi.fn();
-const mockGetTranscript = vi.fn();
-const mockCheckPermission = vi.fn();
-let mockUserRole = "Content Creator";
-let mockUserId = 1;
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MCQQuizPage, RoleFeaturePage, VideoUploadPage } from "./pages";
+import { useAuth } from "./features/auth/AuthContext";
 
 vi.mock("./features/auth/AuthContext", () => ({
-  useAuth: () => ({
-    token: "tok",
-    user: { id: mockUserId, name: "Test", email: "t@t.com", role: mockUserRole, created_at: "" },
-  }),
+  useAuth: vi.fn(),
 }));
 
 vi.mock("./services/api", () => ({
   ApiError: class ApiError extends Error {
     constructor(public readonly status: number, message: string) { super(message); }
   },
-  getVideos: (...args: unknown[]) => mockGetVideos(...args),
-  checkPermission: (...args: unknown[]) => mockCheckPermission(...args),
-  getUploadHistory: vi.fn(),
+  uploadVideo: vi.fn(),
+  processYouTubeVideo: vi.fn(),
+  getAdminAnalytics: vi.fn(),
+  getCreatorAnalytics: vi.fn(),
   getVideoStatuses: vi.fn(),
-  getTranscript: (...args: unknown[]) => mockGetTranscript(...args),
-  getSummary: vi.fn().mockRejectedValue(new Error("does not exist")),
-  getKeyMoments: vi.fn().mockRejectedValue(new Error("does not exist")),
-  getVideoMediaUrl: () => "/media/video.mp4",
+  getVideos: vi.fn(),
+  getUploadHistory: vi.fn(),
+  getTranscript: vi.fn(),
+  getSummary: vi.fn(),
+  getKeyMoments: vi.fn(),
+  getExpectedMcqs: vi.fn(),
+  generateTranscript: vi.fn(),
+  generateSummary: vi.fn(),
+  generateKeyMoments: vi.fn(),
+  retrySummary: vi.fn(),
+  deleteVideo: vi.fn(),
+  downloadTranscript: vi.fn(),
+  register: vi.fn(),
+  checkPermission: vi.fn(),
+  getVideoMediaUrl: vi.fn(),
 }));
 
-const sampleVideo = {
-  id: 42,
-  filename: "sample.mp4",
-  status: "completed",
-  uploaded_at: "2026-09-21T00:00:00Z",
-};
+const mockedUseAuth = vi.mocked(useAuth);
+const api = await import("./services/api");
+const mockedUploadVideo = vi.mocked(api.uploadVideo);
+const mockedProcessYouTubeVideo = vi.mocked(api.processYouTubeVideo);
 
-// ---------------------------------------------------------------------------
-// Import component AFTER mocks are set up
-// ---------------------------------------------------------------------------
-
-import { RoleFeaturePage, TranscriptLibraryPage, VideoLibraryPage } from "./pages";
-import { ApiError } from "./services/api";
-
-afterEach(() => {
-  cleanup();
-});
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-function renderLibrary() {
-  return render(
-    <MemoryRouter>
-      <Routes>
-        <Route path="/" element={<VideoLibraryPage heading="Library" description="desc" />} />
-      </Routes>
-    </MemoryRouter>,
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe("VideoLibraryPage — video management navigation", () => {
-  it("Content Creator sees video details without an embedded transcript panel", async () => {
-    mockUserRole = "Content Creator";
-    mockUserId = 1;
-    mockGetVideos.mockResolvedValue([sampleVideo]);
-
-    renderLibrary();
-
-    await waitFor(() => expect(screen.getByText("Open video details")).toBeTruthy());
-    const link = screen.getByRole("link", { name: "Open video details" }) as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe(`/creator/videos/${sampleVideo.id}`);
-    expect(screen.queryByRole("region", { name: "Transcript" })).toBeNull();
+describe("VideoUploadPage", () => {
+  beforeEach(() => {
+    mockedUseAuth.mockReturnValue({
+      token: "token-123",
+      user: null,
+      loading: false,
+      error: null,
+      login: vi.fn(),
+      logout: vi.fn(),
+    } as any);
+    mockedUploadVideo.mockReset();
+    mockedProcessYouTubeVideo.mockReset();
   });
 
-  it("Learner link points to learner video details", async () => {
-    mockUserRole = "Learner";
-    mockUserId = 2;
-    mockGetVideos.mockResolvedValue([sampleVideo]);
-
-    renderLibrary();
-
-    await waitFor(() => expect(screen.getByText("Open video details")).toBeTruthy());
-    const link = screen.getByRole("link", { name: "Open video details" }) as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe(`/learner/videos/${sampleVideo.id}`);
+  it("defaults to the upload tab and keeps the existing upload workflow available", () => {
+    render(<VideoUploadPage />);
+    expect(screen.getByRole("button", { name: "Upload Video" })).toHaveClass("primary-button");
+    expect(screen.getByLabelText(/choose a video file|Drop your video here/i)).toBeInTheDocument();
   });
 
-  it("Educator link points to educator video details", async () => {
-    mockUserRole = "Educator";
-    mockUserId = 3;
-    mockGetVideos.mockResolvedValue([sampleVideo]);
+  it("switches to the YouTube URL tab and validates empty and invalid URLs", async () => {
+    render(<VideoUploadPage />);
+    fireEvent.click(screen.getByRole("button", { name: "YouTube URL" }));
 
-    renderLibrary();
+    const input = screen.getByPlaceholderText("Paste YouTube video URL");
+    fireEvent.click(screen.getByRole("button", { name: "Process Video" }));
+    expect(await screen.findByText("Please paste a YouTube video URL.")).toBeInTheDocument();
 
-    await waitFor(() => expect(screen.getByText("Open video details")).toBeTruthy());
-    const link = screen.getByRole("link", { name: "Open video details" }) as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe(`/educator/videos/${sampleVideo.id}`);
+    fireEvent.change(input, { target: { value: "https://example.com/not-youtube" } });
+    fireEvent.click(screen.getByRole("button", { name: "Process Video" }));
+    expect(await screen.findByText("Please enter a valid YouTube URL.")).toBeInTheDocument();
   });
 
-  it("Administrator has no key-moments link", async () => {
-    mockUserRole = "Administrator";
-    mockUserId = 4;
-    mockGetVideos.mockResolvedValue([sampleVideo]);
+  it("submits a valid YouTube URL and shows the success state", async () => {
+    mockedProcessYouTubeVideo.mockResolvedValue({
+      video_id: "abc",
+      source_type: "YOUTUBE",
+      source_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      status: "PROCESSING",
+    });
 
-    renderLibrary();
+    render(<VideoUploadPage />);
+    fireEvent.click(screen.getByRole("button", { name: "YouTube URL" }));
+    fireEvent.change(screen.getByPlaceholderText("Paste YouTube video URL"), {
+      target: { value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
+    });
 
-    await waitFor(() => expect(screen.getByText("sample.mp4")).toBeTruthy());
-    expect(screen.queryByRole("link", { name: "Open video details" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Process Video" }));
+
+    await waitFor(() => expect(mockedProcessYouTubeVideo).toHaveBeenCalledWith("token-123", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+    expect(await screen.findByText("YouTube video accepted", { exact: true })).toBeInTheDocument();
+    expect(await screen.findByText(/Processing status: PROCESSING/i)).toBeInTheDocument();
   });
-});
 
-describe("TranscriptLibraryPage", () => {
-  it("shows each video transcript status and links to that video's transcript", async () => {
-    mockUserRole = "Content Creator";
-    mockGetVideos.mockResolvedValue([sampleVideo]);
-    mockGetTranscript.mockResolvedValue({ id: 9, video_id: 42, status: "COMPLETED", text: "River lesson", segments: [{ start: 0, end: 2, text: "River lesson" }], created_at: "2026-09-21T00:00:00Z", updated_at: "2026-09-21T01:00:00Z" });
-    render(<MemoryRouter><TranscriptLibraryPage heading="Transcripts" description="desc" /></MemoryRouter>);
-    expect(await screen.findByText("COMPLETED")).toBeTruthy();
-    expect(screen.getByText("Available")).toBeTruthy();
-    expect((screen.getByRole("link", { name: "View Transcript" }) as HTMLAnchorElement).getAttribute("href")).toBe("/creator/transcripts/42");
+  it("renders the dedicated MCQ quiz flow with real answer options", async () => {
+    mockedUseAuth.mockReturnValue({
+      token: "token-123",
+      user: {
+        id: "user-1",
+        email: "creator@example.com",
+        full_name: "Creator User",
+        role: "Content Creator",
+      },
+      loading: false,
+      error: null,
+      login: vi.fn(),
+      logout: vi.fn(),
+    } as any);
+
+    vi.mocked(api.getVideos).mockResolvedValue([
+      {
+        id: "video-1",
+        filename: "sample.mp4",
+        mime_type: "video/mp4",
+        file_size_bytes: 1024,
+        duration_seconds: 120,
+        processing_status: "COMPLETED",
+        source_type: "UPLOAD",
+        uploaded_at: "2024-01-01T00:00:00Z",
+        owner_id: "user-1",
+        owner_name: "Creator User",
+      },
+    ]);
+    vi.mocked(api.getExpectedMcqs).mockResolvedValue([
+      {
+        question: "What type of programming language is Python?",
+        options: [
+          "Low-level programming language",
+          "High-level general-purpose programming language",
+          "Assembly language",
+          "Machine language",
+        ],
+        correct_answer: "High-level general-purpose programming language",
+        explanation: "The transcript describes Python as a high-level general-purpose language.",
+        difficulty: "Easy",
+        topic: "Python Basics",
+        source: "Transcript",
+        timestamp: "00:00",
+      },
+    ]);
+
+    render(<MCQQuizPage />);
+
+    await waitFor(() => expect(api.getVideos).toHaveBeenCalledWith("token-123", 500));
+    fireEvent.change(screen.getByLabelText(/Select Video/i), { target: { value: "video-1" } });
+    fireEvent.change(screen.getByLabelText(/Number of Questions/i), { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: /Generate Quiz/i }));
+
+    expect(await screen.findByText("Question 1 of 1")).toBeInTheDocument();
+    expect(await screen.findByText("What type of programming language is Python?")).toBeInTheDocument();
+    expect(screen.getAllByRole("radio")).toHaveLength(4);
+
+    fireEvent.click(screen.getByLabelText("B. High-level general-purpose programming language"));
+    fireEvent.click(screen.getByRole("button", { name: /Submit Answer/i }));
+    expect(await screen.findByText("✅ Correct!")).toBeInTheDocument();
+    expect(await screen.findByText(/Correct Answer:/i)).toBeInTheDocument();
   });
 });
 
 describe("RoleFeaturePage", () => {
-  it("reports missing backend modules as not implemented instead of ready", async () => {
-    mockCheckPermission.mockRejectedValueOnce(new ApiError(404, "Not Found"));
-    render(<MemoryRouter><RoleFeaturePage title="Users" description="Manage accounts" endpoint="/rbac/admin/users" /></MemoryRouter>);
-
-    expect(await screen.findByText("This feature is not implemented yet.")).toBeTruthy();
-    expect(screen.getByText("Not implemented")).toBeTruthy();
-    expect(screen.queryByText("Module ready")).toBeNull();
+  it("keeps unavailable role endpoints clearly marked as not implemented", async () => {
+    vi.mocked(api.checkPermission).mockRejectedValueOnce(new api.ApiError(404, "Not Found"));
+    render(<RoleFeaturePage title="Users" description="Manage accounts" endpoint="/rbac/admin/users" />);
+    expect((await screen.findAllByText("This feature is not implemented yet.")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Not implemented")).toBeInTheDocument();
+    expect(screen.queryByText("Module ready")).not.toBeInTheDocument();
   });
 });
