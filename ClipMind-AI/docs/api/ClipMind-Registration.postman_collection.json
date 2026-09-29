@@ -1,0 +1,175 @@
+{
+  "info": {
+    "name": "ClipMind AI - Module 1 API",
+    "description": "Postman coverage for authentication, JWT protection, RBAC, video upload/listing, upload history, and processing status. Set uploadFile to a local fixture path and configure S3/FFmpeg on the backend for cloud and processing requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8000" },
+    { "key": "accessToken", "value": "" },
+    { "key": "creatorToken", "value": "" },
+    { "key": "adminToken", "value": "" },
+    { "key": "learnerToken", "value": "" },
+    { "key": "videoId", "value": "" },
+    { "key": "uploadFile", "value": "C:/path/to/valid-video.mp4" },
+    { "key": "invalidFile", "value": "C:/path/to/not-a-video.txt" },
+    { "key": "oversizedFile", "value": "C:/path/to/video-over-500mb.mp4" }
+  ],
+  "item": [
+    {
+      "name": "1. Registration",
+      "item": [
+        {
+          "name": "Register - valid learner",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Created', () => pm.response.to.have.status(201));"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"full_name\": \"Asha Kumar\",\n  \"email\": \"asha-{{$randomInt}}@example.com\",\n  \"password\": \"strong-password\",\n  \"confirm_password\": \"strong-password\",\n  \"role\": \"Learner\"\n}" }, "url": "{{baseUrl}}/auth/register" }
+        },
+        {
+          "name": "Register - duplicate email (409)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Conflict', () => pm.response.to.have.status(409));"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"full_name\": \"Asha Kumar\",\n  \"email\": \"asha@example.com\",\n  \"password\": \"strong-password\",\n  \"confirm_password\": \"strong-password\",\n  \"role\": \"Learner\"\n}" }, "url": "{{baseUrl}}/auth/register" }
+        },
+        {
+          "name": "Register - invalid password confirmation (422)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Validation error', () => pm.response.to.have.status(422));"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"full_name\": \"Asha Kumar\",\n  \"email\": \"invalid-password-{{$randomInt}}@example.com\",\n  \"password\": \"strong-password\",\n  \"confirm_password\": \"different-password\",\n  \"role\": \"Learner\"\n}" }, "url": "{{baseUrl}}/auth/register" }
+        }
+      ]
+    },
+    {
+      "name": "2. Login and JWT",
+      "item": [
+        {
+          "name": "Login - valid creator and save JWT",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OK', () => pm.response.to.have.status(200));", "const json = pm.response.json();", "pm.collectionVariables.set('creatorToken', json.access_token);", "pm.collectionVariables.set('accessToken', json.access_token);"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"creator@example.com\",\n  \"password\": \"strong-password\"\n}" }, "url": "{{baseUrl}}/auth/login" }
+        },
+        {
+          "name": "Login - valid administrator and save JWT",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OK', () => pm.response.to.have.status(200));", "pm.collectionVariables.set('adminToken', pm.response.json().access_token);"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"strong-password\"\n}" }, "url": "{{baseUrl}}/auth/login" }
+        },
+        {
+          "name": "Login - valid learner and save JWT",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OK', () => pm.response.to.have.status(200));", "pm.collectionVariables.set('learnerToken', pm.response.json().access_token);"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"asha@example.com\",\n  \"password\": \"strong-password\"\n}" }, "url": "{{baseUrl}}/auth/login" }
+        },
+        {
+          "name": "Login - wrong credentials (401)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Unauthorized', () => pm.response.to.have.status(401));"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"creator@example.com\",\n  \"password\": \"wrong-password\"\n}" }, "url": "{{baseUrl}}/auth/login" }
+        },
+        {
+          "name": "Current user - missing JWT (401)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Unauthorized', () => pm.response.to.have.status(401));"] } }],
+          "request": { "method": "GET", "url": "{{baseUrl}}/auth/me" }
+        },
+        {
+          "name": "Current user - invalid JWT (401)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Unauthorized', () => pm.response.to.have.status(401));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer invalid-token" }], "url": "{{baseUrl}}/auth/me" }
+        },
+        {
+          "name": "Current user - valid JWT",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OK', () => pm.response.to.have.status(200));", "pm.test('Safe response', () => pm.expect(pm.response.json()).not.have.property('password_hash'));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{creatorToken}}" }], "url": "{{baseUrl}}/auth/me" }
+        }
+      ]
+    },
+    {
+      "name": "3. Role-based access",
+      "item": [
+        {
+          "name": "Creator upload permission - valid",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Allowed', () => pm.response.to.have.status(200));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{creatorToken}}" }], "url": "{{baseUrl}}/rbac/creator/uploads" }
+        },
+        {
+          "name": "Learner accessing creator permission - forbidden",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Forbidden', () => pm.response.to.have.status(403));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{learnerToken}}" }], "url": "{{baseUrl}}/rbac/creator/uploads" }
+        },
+        {
+          "name": "Admin platform permission - valid",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Allowed', () => pm.response.to.have.status(200));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }], "url": "{{baseUrl}}/rbac/admin/platform" }
+        }
+      ]
+    },
+    {
+      "name": "4. Video upload",
+      "item": [
+        {
+          "name": "Upload - valid video",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Created', () => pm.response.to.have.status(201));", "const json = pm.response.json();", "pm.collectionVariables.set('videoId', json.id);"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{creatorToken}}" }], "body": { "mode": "formdata", "formdata": [{ "key": "file", "type": "file", "src": "{{uploadFile}}" }] }, "url": "{{baseUrl}}/videos/upload" }
+        },
+        {
+          "name": "Upload - invalid extension (400)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Bad request', () => pm.response.to.have.status(400));"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{creatorToken}}" }], "body": { "mode": "formdata", "formdata": [{ "key": "file", "type": "file", "src": "{{invalidFile}}" }] }, "url": "{{baseUrl}}/videos/upload" }
+        },
+        {
+          "name": "Upload - oversized video (413; requires >500 MB fixture)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Payload too large', () => pm.response.to.have.status(413));"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{creatorToken}}" }], "body": { "mode": "formdata", "formdata": [{ "key": "file", "type": "file", "src": "{{oversizedFile}}" }] }, "url": "{{baseUrl}}/videos/upload" }
+        }
+      ]
+    },
+    {
+      "name": "5. Video list",
+      "item": [
+        {
+          "name": "List videos - authenticated",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OK', () => pm.response.to.have.status(200));", "pm.test('Array response', () => pm.expect(pm.response.json()).to.be.an('array'));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{creatorToken}}" }], "url": "{{baseUrl}}/videos/" }
+        },
+        {
+          "name": "List videos - missing JWT (401)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Unauthorized', () => pm.response.to.have.status(401));"] } }],
+          "request": { "method": "GET", "url": "{{baseUrl}}/videos/" }
+        }
+      ]
+    },
+    {
+      "name": "6. Upload history",
+      "item": [
+        {
+          "name": "Creator history - own events",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OK', () => pm.response.to.have.status(200));", "pm.test('Array response', () => pm.expect(pm.response.json()).to.be.an('array'));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{creatorToken}}" }], "url": "{{baseUrl}}/videos/history" }
+        },
+        {
+          "name": "Administrator platform history",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OK', () => pm.response.to.have.status(200));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }], "url": "{{baseUrl}}/admin/upload-history" }
+        },
+        {
+          "name": "Learner history - forbidden",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Forbidden', () => pm.response.to.have.status(403));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{learnerToken}}" }], "url": "{{baseUrl}}/videos/history" }
+        }
+      ]
+    },
+    {
+      "name": "7. Processing status",
+      "item": [
+        {
+          "name": "Get processing status",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OK', () => pm.response.to.have.status(200));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{creatorToken}}" }], "url": "{{baseUrl}}/videos/status" }
+        },
+        {
+          "name": "Process invalid video - failure (422)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Processing failure', () => pm.response.to.have.status(422));"] } }],
+          "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{creatorToken}}" }], "url": "{{baseUrl}}/videos/{{videoId}}/process" }
+        },
+        {
+          "name": "Status without JWT (401)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Unauthorized', () => pm.response.to.have.status(401));"] } }],
+          "request": { "method": "GET", "url": "{{baseUrl}}/videos/status" }
+        }
+      ]
+    }
+  ]
+}
