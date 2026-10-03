@@ -59,7 +59,11 @@ export function KeyMomentsPage() {
     setError(null);
     try {
       const result = await generateKeyMoments(token, videoId);
+<<<<<<< HEAD
+      setMoments(Array.isArray(result) ? result : result.key_moments);
+=======
       setMoments(result.key_moments);
+>>>>>>> main
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Key moments could not be generated.");
     } finally {

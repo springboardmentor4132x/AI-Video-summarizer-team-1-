@@ -18,7 +18,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route element={<ProtectedRoute />}>
             <Route element={<AppShell />}>
               <Route path="/dashboard" element={<DashboardRedirect />} />
-              <Route path="/analytics" element={<AnalyticsPage />} />
               <Route element={<ProtectedRoute allowedRoles={["Content Creator"]} />}>
                 <Route path="/dashboard/content-creator" element={<Dashboard />} />
                 <Route path="/creator/upload" element={<VideoUploadPage />} />
@@ -29,7 +28,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/creator/summaries/:videoId" element={<VideoSummaryPage />} />
                 <Route path="/creator/key-moments/:videoId" element={<VideoKeyMomentsPage />} />
                 <Route path="/creator/history" element={<UploadHistoryPage />} />
-                <Route path="/creator/processing" element={<ProcessingStatusPage />} />
+                  <Route path="/creator/processing" element={<ProcessingStatusPage />} />
               </Route>
               <Route element={<ProtectedRoute allowedRoles={["Learner"]} />}>
                 <Route path="/dashboard/learner" element={<Dashboard />} />
@@ -43,6 +42,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/educator/upload" element={<VideoUploadPage />} />
                 <Route path="/educator/content" element={<VideoLibraryPage heading="Educational content" description="Review the lecture videos and educational materials you manage." />} />
                 <Route path="/educator/transcripts" element={<VideoLibraryPage heading="Lecture transcripts" description="Generate, review, edit, and download transcripts for your lectures." />} />
+                <Route path="/educator/key-moments/:videoId" element={<VideoKeyMomentsPage />} />
                 <Route path="/educator/classroom" element={<RoleFeaturePage title="Classroom Content" description="Keep classroom-ready lessons together for your learners." endpoint="/rbac/educator/content" />} />
               </Route>
               <Route element={<ProtectedRoute allowedRoles={["Administrator"]} />}>
@@ -50,6 +50,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/admin/users" element={<RoleFeaturePage title="Users" description="Review and manage platform accounts." endpoint="/rbac/admin/users" />} />
                 <Route path="/admin/roles" element={<RoleFeaturePage title="Roles" description="Inspect the platform access structure." endpoint="/rbac/admin/users" />} />
                 <Route path="/admin/activity" element={<UploadHistoryPage administrator />} />
+                <Route path="/admin/analytics" element={<AnalyticsPage />} />
                 <Route path="/admin/monitoring" element={<RoleFeaturePage title="System Monitoring" description="Check service readiness and platform health." endpoint="/rbac/admin/platform" />} />
               </Route>
               <Route path="/profile" element={<Profile />} />

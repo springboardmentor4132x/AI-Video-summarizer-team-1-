@@ -1,4 +1,4 @@
-import type { CurrentUser, LoginResponse } from "../types/auth";
+import type { CurrentUser, LoginResponse, Role } from "../types/auth";
 import { API_BASE_URL, withApiBase } from "../config";
 export const AUTH_EXPIRED_EVENT = "clipmind:auth-expired";
 export interface VideoUploadResponse {
@@ -78,12 +78,15 @@ export interface Transcript {
 export interface Summary {
   id: string;
   video_id: string;
+  transcript_id?: string | number;
   content: string;
   overview: string;
+  short_summary?: string | null;
+  detailed_summary?: string | null;
   main_points: string[];
   key_takeaways: string[];
   duration_seconds: number | null;
-  status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+  status: "NOT_STARTED" | "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -96,7 +99,8 @@ export interface KeyMoment {
   end_time: number;
   title: string;
   topic: string | null;
-  description: string;
+  description?: string;
+  text: string;
   importance_score: number;
   transcript_text: string;
   created_at: string;
@@ -298,6 +302,7 @@ export class ApiError extends Error {
 
 const API_URL = API_BASE_URL;
 const INVALID_TOKEN_VALUES = new Set(["", "undefined", "null"]);
+export const AUTH_EXPIRED_EVENT = "clipmind:auth-expired";
 
 export function getVideoMediaUrl(videoId: string, userId: string, filename: string, storageKey?: string | null) {
   if (storageKey && storageKey.trim()) {
@@ -310,9 +315,9 @@ export function getVideoMediaUrl(videoId: string, userId: string, filename: stri
   return `${API_URL}/media/videos/${userId}/${videoId}${suffix}`;
 }
 
-export async function getVideoMediaBlobUrl(token: string, videoId: string) {
+export async function getVideoMediaBlobUrl(token: string, videoId: string, userId?: string | number) {
   ensureValidAuthorization(token);
-  const response = await fetch(`${API_URL}/videos/${videoId}/media`, {
+  const response = await fetch(`${API_URL}/videos/media/videos/${userId ?? ""}/${videoId}`, {
     headers: getAuthHeaders(token),
   });
   if (!response.ok) {
@@ -320,6 +325,10 @@ export async function getVideoMediaBlobUrl(token: string, videoId: string) {
     throw new ApiError(response.status, message);
   }
   return URL.createObjectURL(await response.blob());
+}
+
+export function getVideoMediaObjectUrl(token: string, videoId: string | number, userId: string | number, _filename: string) {
+  return getVideoMediaBlobUrl(token, String(videoId), userId);
 }
 
 export function getAuthHeaders(token?: string | null): Record<string, string> {
@@ -356,6 +365,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (authHeader) {
     const candidate = authHeader.replace(/^Bearer\s+/i, "").trim();
     if (!candidate || INVALID_TOKEN_VALUES.has(candidate.toLowerCase())) {
+      if (typeof window !== "undefined" && authHeader) window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { token: authHeader.replace(/^Bearer\\s+/i, "") } }));
       throw new ApiError(401, "Your session has expired. Please log in again.");
     }
   }
@@ -413,17 +423,22 @@ export function login(email: string, password: string) {
 }
 
 export function register(payload: RegistrationPayload) {
-  return request<{ id: string; email: string; role: string }>("/auth/register", {
+  return request<{ id: number; name: string; email: string; role: Role; created_at: string }>("/auth/register", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      name: payload.full_name.trim(),
+      email: payload.email.trim(),
+      password: payload.password,
+      role: payload.role,
+    }),
   });
 }
 
 export function getCurrentUser(token: string) {
   ensureValidAuthorization(token);
-  return request<CurrentUser>("/auth/me", {
+  return request<Omit<CurrentUser, "full_name"> & { full_name?: string }>("/auth/me", {
     headers: getAuthHeaders(token),
-  });
+  }).then(user => ({ ...user, full_name: user.full_name ?? user.name }));
 }
 
 function analyticsPath(path: string, range?: AnalyticsRange) {
@@ -498,7 +513,7 @@ export function getVideos(token: string, limit = 500) {
   });
 }
 
-export function deleteVideo(token: string, videoId: string) {
+export function deleteVideo(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
   return request<{ message: string; video_id: string }>(`/videos/${videoId}`, {
     method: "DELETE",
@@ -506,14 +521,14 @@ export function deleteVideo(token: string, videoId: string) {
   });
 }
 
-export function getTranscript(token: string, videoId: string) {
+export function getTranscript(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
   return request<Transcript>(`/videos/${videoId}/transcript`, {
     headers: getAuthHeaders(token),
   });
 }
 
-export function generateTranscript(token: string, videoId: string) {
+export function generateTranscript(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
   return request<Transcript>(`/videos/${videoId}/transcript`, {
     method: "POST",
@@ -521,7 +536,7 @@ export function generateTranscript(token: string, videoId: string) {
   });
 }
 
-export function updateTranscript(token: string, videoId: string, text: string) {
+export function updateTranscript(token: string, videoId: string | number, text: string) {
   ensureValidAuthorization(token);
   return request<Transcript>(`/videos/${videoId}/transcript`, {
     method: "PATCH",
@@ -530,14 +545,14 @@ export function updateTranscript(token: string, videoId: string, text: string) {
   });
 }
 
-export function getSummary(token: string, videoId: string) {
+export function getSummary(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
   return request<Summary>(`/videos/${videoId}/summary`, {
     headers: getAuthHeaders(token),
   });
 }
 
-export function generateSummary(token: string, videoId: string, regenerate = false) {
+export function generateSummary(token: string, videoId: string | number, regenerate = false) {
   ensureValidAuthorization(token);
   const query = regenerate ? "?regenerate=true" : "";
   return request<Summary>(`/videos/${videoId}/summary${query}`, {
@@ -546,7 +561,7 @@ export function generateSummary(token: string, videoId: string, regenerate = fal
   });
 }
 
-export function retrySummary(token: string, videoId: string) {
+export function retrySummary(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
   return request<Summary>(`/videos/${videoId}/summary/retry`, {
     method: "POST",
@@ -554,29 +569,29 @@ export function retrySummary(token: string, videoId: string) {
   });
 }
 
-export function getKeyMoments(token: string, videoId: string) {
+export function getKeyMoments(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
-  return request<KeyMoment[]>(`/videos/${videoId}/key-moments`, {
+  return request<{ video_id: number; status: string; key_moments: KeyMoment[] }>(`/videos/${videoId}/key-moments`, {
     headers: getAuthHeaders(token),
   });
 }
 
-export function getExpectedMcqs(token: string, videoId: string) {
+export function getExpectedMcqs(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
   return request<McqQuestion[]>(`/videos/${videoId}/mcqs`, {
     headers: getAuthHeaders(token),
   });
 }
 
-export function generateKeyMoments(token: string, videoId: string) {
+export function generateKeyMoments(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
-  return request<KeyMoment[]>(`/videos/${videoId}/key-moments`, {
+  return request<{ video_id: number; status: string; key_moments: KeyMoment[] }>(`/videos/${videoId}/key-moments/generate`, {
     method: "POST",
     headers: getAuthHeaders(token),
   });
 }
 
-export async function downloadTranscript(token: string, videoId: string) {
+export async function downloadTranscript(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
   const response = await fetch(withApiBase(`/videos/${videoId}/transcript/download`), {
     headers: getAuthHeaders(token),

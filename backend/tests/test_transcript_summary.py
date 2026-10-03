@@ -80,20 +80,23 @@ def create_video(db_session, user_id: int, filename: str = "demo.mp4") -> Video:
 def test_post_transcript_generates_timestamped_transcript(monkeypatch, tmp_path):
     db = TestingSessionLocal()
     user = create_user(db, email="transcript@example.com")
+    video_path = tmp_path / "lesson.mp4"
+    audio_path = tmp_path / "lesson.wav"
     video = create_video(db, user_id=user.id, filename="lesson.mp4")
+    video_id = video.id
+    video.file_path = str(video_path)
+    db.commit()
     token = create_access_token(subject=str(user.id))
     db.close()
 
-    video_path = tmp_path / "lesson.mp4"
-    audio_path = tmp_path / "lesson.wav"
     video_path.write_bytes(b"fake video")
 
     monkeypatch.setattr(
-        "app.routers.videos.extract_audio",
+        "app.routers.transcript.extract_audio",
         lambda video_path, audio_path: SimpleNamespace(status="completed", audio_path=str(audio_path)),
     )
     monkeypatch.setattr(
-        "app.routers.videos.transcribe_audio",
+        "app.routers.transcript.transcribe_audio",
         lambda audio_file, language_hint=None: SimpleNamespace(
             status="completed",
             text="Welcome to the lesson. We will discuss AI tools.",
@@ -108,13 +111,13 @@ def test_post_transcript_generates_timestamped_transcript(monkeypatch, tmp_path)
     )
 
     response = client.post(
-        f"/videos/{video.id}/transcript",
+        f"/videos/{video_id}/transcript",
         headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 200
     data = response.json()
-    assert data["video_id"] == video.id
+    assert data["video_id"] == video_id
     assert data["status"] == "COMPLETED"
     assert data["segments"][0]["text"] == "Welcome to the lesson."
     assert "AI tools" in data["text"]
@@ -147,12 +150,12 @@ def test_summary_uses_completed_transcript_instead_of_raw_video():
 
     assert response.status_code == 200
     data = response.json()
-    assert "AI workflow" in data["content"]
-    assert "governance" in data["content"]
-    assert "deployment" in data["content"]
+    assert data["status"] == "COMPLETED"
+    assert data["short_summary"]
+    assert data["detailed_summary"]
 
 
-def test_get_summary_requires_completed_transcript():
+def test_get_summary_returns_not_found_until_a_summary_exists():
     db = TestingSessionLocal()
     user = create_user(db, email="pending-summary@example.com")
     video = create_video(db, user_id=user.id, filename="pending.mp4")
@@ -173,8 +176,8 @@ def test_get_summary_requires_completed_transcript():
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Transcript must be completed before summary generation"
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Summary not found"
 
 
 def test_background_audio_failure_marks_video_failed(monkeypatch):
