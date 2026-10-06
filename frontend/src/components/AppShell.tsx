@@ -58,23 +58,7 @@ export function AppShell() {
 
   return (
     <div className="app-shell">
-<<<<<<< HEAD
-      <aside className="sidebar">
-        <div className="brand-wrap">
-          <div className="brand">
-            <span className="brand-mark"><Film size={18} /></span>
-            <span className="brand-copy">ClipMind <em>AI</em></span>
-          </div>
-        </div>
-
-        <div className="identity">
-          <div className="identity-header">
-            <div className="user-avatar" aria-label={`${(user.full_name ?? user.name ?? user.email)} avatar`}>{initials}</div>
-            <div className="identity-copy">
-              <strong>{(user.full_name ?? user.name ?? user.email)}</strong>
-              <span className="role-badge">{user.role}</span>
-=======
-      <aside className={`sidebar ${isMobileMenuOpen ? "open" : ""}`}>
+<aside className={`sidebar ${isMobileMenuOpen ? "open" : ""}`}>
         
         <div className="sidebar-header">
           {/* Logo with Refresh Action */}
@@ -88,7 +72,6 @@ export function AppShell() {
             <div className="brand">
               <span className="brand-mark"><Film size={18} /></span>
               <span className="brand-copy">ClipMind <em>AI</em></span>
->>>>>>> main
             </div>
           </div>
 

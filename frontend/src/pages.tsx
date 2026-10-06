@@ -4,7 +4,7 @@ import { Activity, ArrowUpRight, BookOpen, CalendarDays, Clapperboard, Clock3, F
 import { withApiBase } from "./config";
 import { Modal } from "./components/Modal";
 import { useAuth } from "./features/auth/AuthContext";
-import { ApiError, checkPermission, deleteVideo, downloadTranscript, generateKeyMoments, generateSummary, generateTranscript, getAdminAnalytics, getCreatorAnalytics, getExpectedMcqs, getKeyMoments, getSummary, getTranscript, getUploadHistory, getVideoMediaBlobUrl, getVideoStatuses, getVideos, getVideoMediaUrl, processYouTubeVideo, register as registerRequest, retrySummary, uploadVideo, type AnalyticsDashboard, type AnalyticsRange, type AnalyticsRecentVideo, type KeyMoment, type McqQuestion, type Summary, type Transcript, type UploadHistoryEvent, type VideoListItem, type VideoStatus } from "./services/api";
+import { ApiError, checkPermission, deleteVideo, downloadTranscript, generateKeyMoments, generateSummary, generateTranscript, getAdminAnalytics, getCreatorAnalytics, getExpectedMcqs, getKeyMoments, getSummary, getTranscript, getUploadHistory, getVideoMediaBlobUrl, getVideoStatuses, getVideos, getVideoMediaUrl, processYouTubeVideo, uploadYouTubeVideo ,register as registerRequest, retrySummary, uploadVideo, type AnalyticsDashboard, type AnalyticsRange, type AnalyticsRecentVideo, type KeyMoment, type McqQuestion, type Summary, type Transcript, type UploadHistoryEvent, type VideoListItem, type VideoStatus } from "./services/api";
 import type { Role } from "./types/auth";
 
 const dashboardConfig: Record<Role, { kicker: string; title: string; description: string; accent: string; actions: { label: string; detail: string; icon: typeof Video; route: string; endpoint?: string }[] }> = {
@@ -87,20 +87,6 @@ function getTranscriptState(videoStatus?: string | null, transcriptStatus?: stri
   if (status.includes("COMPLETED") || status.includes("READY") || status.includes("SUCCESS")) return "transcript_ready" as const;
   if (status.includes("PROCESSING") || status.includes("PENDING") || status.includes("IN_PROGRESS")) return "processing" as const;
   return "transcript_missing" as const;
-}
-
-function getTranscriptStateMessage(state: ReturnType<typeof getTranscriptState>) {
-  switch (state) {
-    case "processing":
-      return "🎙️ Processing transcript...";
-    case "transcript_ready":
-      return "🟢 Transcript ready";
-    case "transcript_failed":
-      return "⚠️ Transcript generation failed";
-    case "transcript_missing":
-    default:
-      return "📝 Transcript isn't available yet.";
-  }
 }
 
 function Dashboard() {
@@ -261,147 +247,8 @@ function Dashboard() {
   );
 }
 
-function AnalyticsBars({ items, emptyMessage }: { items: { label: string; count: number }[]; emptyMessage: string }) {
-  const maximum = Math.max(...items.map(item => item.count), 1);
-  if (!items.length) return <p className="analytics-empty">{emptyMessage}</p>;
-  return <div className="analytics-bars">{items.map(item => <div className="analytics-bar" key={item.label}><div><span>{item.label}</span><strong>{item.count}</strong></div><span className="analytics-bar-track"><i style={{ width: `${Math.max((item.count / maximum) * 100, 2)}%` }} /></span></div>)}</div>;
-}
-
-function ActivityChart({ items }: { items: { date: string; count: number }[] }) {
-  const maximum = Math.max(...items.map(item => item.count), 1);
-  if (!items.length) return <p className="analytics-empty">No activity recorded yet.</p>;
-  return <div className="analytics-activity-chart" aria-label="Upload activity over time">{items.slice(-14).map(item => <div className="analytics-activity-column" key={item.date}><strong>{item.count}</strong><span><i style={{ height: `${Math.max((item.count / maximum) * 100, 3)}%` }} /></span><small>{item.date.slice(5)}</small></div>)}</div>;
-}
-
-function AnalyticsMetric({ label, value, tone = "teal" }: { label: string; value: string | number; tone?: string }) {
-  return <div className={`stat-card ${tone}`}><div className="stat-header"><span>{label}</span></div><strong>{value}</strong></div>;
-}
-
-type AnalyticsRangeKey = "7d" | "30d" | "90d" | "all";
-
-function rangeFor(key: AnalyticsRangeKey): AnalyticsRange {
-  if (key === "all") return {};
-  const end = new Date();
-  const start = new Date(end);
-  start.setDate(end.getDate() - Number(key.replace("d", "")) + 1);
-  const isoDate = (value: Date) => value.toISOString().slice(0, 10);
-  return { from: isoDate(start), to: isoDate(end) };
-}
-
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function V2Metric({ label, value, detail, icon: Icon, tone }: { label: string; value: string | number; detail: string; icon: typeof Video; tone: string }) {
-  return <article className={`analytics-metric ${tone}`}><span className="analytics-metric-icon"><Icon size={18} /></span><span className="analytics-metric-label">{label}</span><strong>{value}</strong><small>{detail}</small></article>;
-}
-
-function V2ActivityChart({ items }: { items: { date: string; count: number }[] }) {
-  if (!items.length) return <div className="analytics-empty-block">No video activity in this range.</div>;
-  const width = 760;
-  const height = 220;
-  const padding = { top: 22, right: 18, bottom: 32, left: 34 };
-  const max = Math.max(...items.map(item => item.count), 1);
-  const x = (index: number) => padding.left + (index / Math.max(items.length - 1, 1)) * (width - padding.left - padding.right);
-  const y = (count: number) => height - padding.bottom - (count / max) * (height - padding.top - padding.bottom);
-  const points = items.map((item, index) => `${x(index)},${y(item.count)}`).join(" ");
-  const labelStep = Math.max(1, Math.ceil(items.length / 7));
-  return <div className="analytics-chart-wrap"><svg className="analytics-line-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Video uploads over time"><line x1={padding.left} y1={height - padding.bottom} x2={width - padding.right} y2={height - padding.bottom} className="chart-axis" /><polyline points={`${padding.left},${height - padding.bottom} ${points} ${width - padding.right},${height - padding.bottom}`} className="chart-area" /><polyline points={points} className="chart-line" />{items.map((item, index) => <g key={item.date}><title>{`${formatDate(item.date)}: ${item.count} uploads`}</title><circle cx={x(index)} cy={y(item.count)} r="4" className="chart-point" />{(index % labelStep === 0 || index === items.length - 1) && <text x={x(index)} y={height - 9} textAnchor="middle" className="chart-label">{item.date.slice(5)}</text>}</g>)}</svg></div>;
-}
-
-function V2StatusDonut({ items }: { items: { label: string; count: number }[] }) {
-  const groups = [
-    { label: "Completed", color: "#34D399", count: items.filter(item => item.label === "COMPLETED").reduce((sum, item) => sum + item.count, 0) },
-    { label: "Processing", color: "#22D3EE", count: items.filter(item => ["PROCESSING", "VALIDATING", "FFMPEG_PROCESSING", "READY_FOR_AI", "AI_PROCESSING"].includes(item.label)).reduce((sum, item) => sum + item.count, 0) },
-    { label: "Uploaded / pending", color: "#FBBF24", count: items.filter(item => ["UPLOADING", "UPLOADED"].includes(item.label)).reduce((sum, item) => sum + item.count, 0) },
-    { label: "Failed", color: "#F87171", count: items.filter(item => item.label === "FAILED").reduce((sum, item) => sum + item.count, 0) },
-  ];
-  const total = groups.reduce((sum, item) => sum + item.count, 0);
-  let offset = 0;
-  const gradient = groups.map(group => { const start = offset; offset += total ? group.count / total * 100 : 0; return `${group.color} ${start}% ${offset}%`; }).join(", ");
-  return <div className="status-donut-layout"><div className="status-donut" style={{ background: total ? `conic-gradient(${gradient})` : "#273244" }} role="img" aria-label={`${total} videos by processing status`}><div><strong>{total}</strong><span>videos</span></div></div><div className="status-legend">{groups.map(group => <div key={group.label}><span className="legend-dot" style={{ background: group.color }} /><span>{group.label}</span><strong>{group.count}</strong></div>)}</div></div>;
-}
-
-function Pipeline({ analytics }: { analytics: AnalyticsDashboard }) {
-  const stages = [
-    { label: "Videos", icon: Clapperboard, data: analytics.processing_insights.videos, tone: "violet" },
-    { label: "Transcripts", icon: FileText, data: analytics.processing_insights.transcripts, tone: "cyan" },
-    { label: "AI summaries", icon: Sparkles, data: analytics.processing_insights.summaries, tone: "amber" },
-    { label: "Key moments", icon: WandSparkles, data: analytics.processing_insights.key_moments, tone: "rose" },
-  ];
-  return <><div className="pipeline">{stages.map((stage, index) => <div className="pipeline-step" key={stage.label}><article className={`pipeline-card ${stage.tone}`}><span><stage.icon size={18} /></span><small>{stage.label}</small><strong>{stage.data.count}</strong>{index > 0 && <em>{stage.data.coverage_percentage}% coverage</em>}</article>{index < stages.length - 1 && <span className="pipeline-arrow" aria-hidden="true">↓</span>}</div>)}</div><Phase5Charts analytics={analytics} onVideoSelect={() => undefined} /></>;
-}
-
-function InsightBars({ items }: { items: { label: string; count: number }[] }) {
-  const maximum = Math.max(...items.map(item => item.count), 1);
-  if (!items.length) return <div className="analytics-empty-block">No content insights available yet.</div>;
-  return <div className="insight-bars">{items.slice(0, 10).map(item => <div className="insight-bar" key={item.label}><div><span>{item.label}</span><strong>{item.count}</strong></div><span className="insight-track"><i style={{ width: `${Math.max(item.count / maximum * 100, 3)}%` }} /></span></div>)}</div>;
-}
-
-function Phase5HorizontalChart({ title, items, suffix = "", onSelect }: { title: string; items: { label: string; value: number; detail?: string }[]; suffix?: string; onSelect?: (label: string) => void }) {
-  if (!items.length) return <div className="analytics-empty-block">No data available for this period.</div>;
-  const sorted = [...items].sort((left, right) => right.value - left.value).slice(0, 10);
-  const maximum = Math.max(...sorted.map(item => item.value), 1);
-  return <div className="phase5-horizontal-chart" aria-label={title}>{sorted.map(item => <button type="button" className="phase5-chart-row" key={item.label} onClick={() => onSelect?.(item.label)} title={item.detail ?? `${item.label}: ${item.value}${suffix}`}><span className="phase5-chart-label">{item.label}</span><span className="phase5-chart-track"><i style={{ width: `${Math.max(item.value / maximum * 100, 3)}%` }} /></span><strong>{Number.isInteger(item.value) ? item.value : item.value.toFixed(2)}{suffix}</strong></button>)}</div>;
-}
-
-function Phase5ContentActivity({ items }: { items: { date: string; transcripts: number; summaries: number; key_moments: number }[] }) {
-  if (!items.length) return <div className="analytics-empty-block">No AI activity available for this period.</div>;
-  const width = 760;
-  const height = 220;
-  const padding = { top: 18, right: 18, bottom: 32, left: 30 };
-  const maximum = Math.max(...items.flatMap(item => [item.transcripts, item.summaries, item.key_moments]), 1);
-  const x = (index: number) => padding.left + index / Math.max(items.length - 1, 1) * (width - padding.left - padding.right);
-  const y = (value: number) => height - padding.bottom - value / maximum * (height - padding.top - padding.bottom);
-  const series = [{ key: "transcripts", label: "Transcripts", color: "#22D3EE" }, { key: "summaries", label: "Summaries", color: "#FBBF24" }, { key: "key_moments", label: "Key moments", color: "#FB7185" }] as const;
-  return <div><div className="phase5-chart-legend">{series.map(item => <span key={item.key}><i style={{ background: item.color }} />{item.label}</span>)}</div><svg className="analytics-line-chart phase5-multi-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="AI activity over time"><line x1={padding.left} y1={height - padding.bottom} x2={width - padding.right} y2={height - padding.bottom} className="chart-axis" />{series.map(item => { const points = items.map((entry, index) => `${x(index)},${y(entry[item.key])}`).join(" "); return <polyline key={item.key} points={points} className="phase5-series-line" style={{ stroke: item.color }} />; })}{items.map((item, index) => <g key={item.date}><title>{`${formatDate(item.date)}: ${item.transcripts} transcripts, ${item.summaries} summaries, ${item.key_moments} key moments`}</title>{series.map(seriesItem => <circle key={seriesItem.key} cx={x(index)} cy={y(item[seriesItem.key])} r="3" style={{ fill: seriesItem.color }} />)}{(index % Math.max(1, Math.ceil(items.length / 7)) === 0 || index === items.length - 1) && <text x={x(index)} y={height - 9} textAnchor="middle" className="chart-label">{item.date.slice(5)}</text>}</g>)}</svg></div>;
-}
-
-function Phase5CompressionChart({ data }: { data: { average_transcript_words: number; average_summary_words: number; compression_ratio: number } }) {
-  return <div className="compression-chart"><div className="compression-bars"><div><span>Transcript words</span><i style={{ height: `${data.average_transcript_words ? 100 : 0}%` }} /><strong>{Math.round(data.average_transcript_words).toLocaleString()}</strong></div><div><span>Summary words</span><i style={{ height: `${data.average_transcript_words ? Math.max(data.average_summary_words / data.average_transcript_words * 100, 3) : 0}%` }} /><strong>{Math.round(data.average_summary_words).toLocaleString()}</strong></div></div><p>Average summary compression: <strong>{(data.compression_ratio * 100).toFixed(1)}%</strong> of transcript length</p></div>;
-}
-
-function Phase5Charts({ analytics, onVideoSelect }: { analytics: AnalyticsDashboard; onVideoSelect: (filename: string) => void }) {
-  const keyMomentItems = analytics.key_moment_insights.by_video.map(item => ({ label: item.label, value: item.count }));
-  const scoreItems = analytics.recent_videos.map(video => ({ label: video.filename, value: video.ai_score, detail: `${video.filename}: ${video.ai_score}/100` }));
-  const keywordItems = analytics.keyword_intelligence.map(item => ({ label: item.keyword, value: item.frequency, detail: `${item.frequency} occurrences across ${item.video_count} videos` }));
-  return <div className="analytics-chart-grid"><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Keyword frequency</span><h2>Most used terms</h2></div><span className="section-note">Top 10</span></div><Phase5HorizontalChart title="Keyword frequency" items={keywordItems} /></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Key moments by video</span><h2>Where the signal is</h2></div><span className="section-note">Top 10</span></div><Phase5HorizontalChart title="Key moments by video" items={keyMomentItems} onSelect={onVideoSelect} /></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Intelligence comparison</span><h2>AI score by video</h2></div><span className="section-note">0–100 scale</span></div><Phase5HorizontalChart title="AI content intelligence by video" items={scoreItems} suffix=" / 100" onSelect={onVideoSelect} /></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Compression insight</span><h2>Transcript vs summary</h2></div></div><Phase5CompressionChart data={analytics.compression_insights} /></article><article className="analytics-panel analytics-chart-wide"><div className="section-heading"><div><span className="eyebrow">AI activity trend</span><h2>Content generated over time</h2></div></div><Phase5ContentActivity items={analytics.content_activity} /></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Importance distribution</span><h2>Key moment quality</h2></div></div><Phase5HorizontalChart title="Key moment importance" items={analytics.importance_distribution.map(item => ({ label: item.label, value: item.count, detail: `${item.count} moments · ${item.average_importance} average importance` }))} /></article></div>;
-}
-
-function LoadingAnalytics() {
-  return <section className="simple-page analytics-page"><div className="analytics-skeleton-head"><span /><span /><span /></div><div className="analytics-skeleton-grid">{Array.from({ length: 8 }, (_, index) => <div className="analytics-skeleton-card" key={index}><span /><strong /><small /></div>)}</div><div className="analytics-skeleton-panel" /></section>;
-}
-
-function Phase4VideoDetail({ video, onClose }: { video: AnalyticsRecentVideo; onClose: () => void }) {
-  return <div className="analytics-detail-backdrop" role="presentation" onClick={onClose}><aside className="analytics-detail-panel" role="dialog" aria-modal="true" aria-label={`${video.filename} intelligence details`} onClick={event => event.stopPropagation()}><button className="analytics-detail-close" type="button" aria-label="Close video details" onClick={onClose}>×</button><span className="eyebrow">Video overview</span><h2>{video.filename}</h2><p>{video.status} · Uploaded {formatDate(video.uploaded_at)}</p><div className="detail-score"><strong>{video.ai_score}</strong><span>/ 100<br />AI content intelligence</span></div><div className="detail-breakdown">{Object.entries(video.ai_score_components).map(([label, score]) => <div key={label}><span>{label}</span><strong>{Math.round(score)}%</strong><i><em style={{ width: `${score}%` }} /></i></div>)}</div><div className="detail-columns"><section><span>Transcript</span><strong>{video.transcript_status ?? "No transcript"}</strong><small>{video.transcript_word_count.toLocaleString()} words · {video.transcript_character_count.toLocaleString()} chars</small></section><section><span>Summary</span><strong>{video.summary_status === "COMPLETED" ? "Generated" : video.summary_status ?? "Not generated"}</strong><small>{video.summary_word_count.toLocaleString()} words · {video.main_points_count} main points</small></section><section><span>Key moments</span><strong>{video.key_moment_count}</strong><small>{video.average_importance.toFixed(2)} average importance · {video.highest_importance.toFixed(2)} highest</small></section><section><span>Content</span><strong>{video.topic_count} topics</strong><small>{video.top_keywords.join(", ") || "No keywords yet"}</small></section></div></aside></div>;
-}
-
-export function AnalyticsPage() {
-  const { token, user } = useAuth();
-  const [analytics, setAnalytics] = useState<AnalyticsDashboard | null>(null);
-  const [rangeKey, setRangeKey] = useState<AnalyticsRangeKey>("all");
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [selectedVideo, setSelectedVideo] = useState<AnalyticsRecentVideo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!token || !user) return;
-    let active = true;
-    setLoading(true);
-    setError(null);
-    const loader = user.role === "Administrator" ? getAdminAnalytics : getCreatorAnalytics;
-    loader(token, rangeFor(rangeKey)).then(result => { if (active) setAnalytics(result); }).catch(reason => { if (active) setError(reason instanceof Error ? reason.message : "Unable to load analytics."); }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [token, user, rangeKey, refreshKey]);
-
-  if (loading && !analytics) return <LoadingAnalytics />;
-  if (error) return <section className="simple-page analytics-page"><div className="analytics-error"><span className="eyebrow">Analytics unavailable</span><h1>Unable to load analytics</h1><p>{error}</p><button className="primary-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={16} /> Try again</button></div></section>;
-  if (!analytics) return null;
-
-  const ranges: { key: AnalyticsRangeKey; label: string }[] = [{ key: "7d", label: "7 Days" }, { key: "30d", label: "30 Days" }, { key: "90d", label: "90 Days" }, { key: "all", label: "All Time" }];
-  const noVideos = analytics.overview.total_videos === 0;
-  return <section className="simple-page analytics-page"><header className="analytics-header"><div><span className="eyebrow">ClipMind AI · AI video intelligence center</span><h1>Analytics</h1><p>See what your videos contain, what the AI discovered, and what deserves attention next.</p></div><div className="analytics-actions"><div className="range-control" aria-label="Analytics date range">{ranges.map(range => <button key={range.key} type="button" className={rangeKey === range.key ? "active" : ""} aria-pressed={rangeKey === range.key} onClick={() => setRangeKey(range.key)}>{range.label}</button>)}</div><button className="icon-button" type="button" aria-label="Refresh analytics" title="Refresh analytics" onClick={() => setRefreshKey(value => value + 1)} disabled={loading}><RefreshCw size={16} className={loading ? "spin" : ""} /></button></div></header>{loading && <div className="analytics-refreshing" role="status"><RefreshCw size={14} className="spin" /> Refreshing live data</div>}{noVideos ? <div className="analytics-empty-state"><span className="analytics-empty-icon"><Video size={25} /></span><h2>No video analytics yet</h2><p>Upload your first video to start generating transcripts, summaries, key moments, and insights.</p><Link className="primary-button" to="/creator/upload"><Upload size={16} /> Upload Video</Link></div> : <><div className="analytics-section-heading"><span className="eyebrow">Executive overview</span><h2>AI content intelligence at a glance</h2></div><div className="analytics-metric-grid"><V2Metric label="Videos analyzed" value={analytics.overview.total_videos} detail={`${analytics.overview.completed_videos} completed`} icon={Clapperboard} tone="violet" /><V2Metric label="Transcripts" value={analytics.overview.total_transcripts} detail={`${analytics.transcript_insights.total_words.toLocaleString()} words`} icon={FileText} tone="cyan" /><V2Metric label="AI summaries" value={analytics.summary_insights.completed_summaries} detail={`${analytics.summary_insights.generation_rate_percentage}% coverage`} icon={Sparkles} tone="amber" /><V2Metric label="Key moments" value={analytics.overview.total_key_moments} detail={`${analytics.key_moment_insights.videos_with_key_moments} videos surfaced`} icon={WandSparkles} tone="rose" /><article className="intelligence-score-card"><span className="eyebrow">AI content intelligence</span><strong>{analytics.intelligence_score.score}</strong><span>/ 100</span><p>{analytics.intelligence_score.explanation}</p></article></div><div className="analytics-phase4-grid"><article className="analytics-panel analytics-phase4-wide"><div className="section-heading"><div><span className="eyebrow">AI insights</span><h2>What deserves attention</h2></div></div><div className="ai-insights-grid">{analytics.ai_insights.length ? analytics.ai_insights.map(insight => <div className={`ai-insight ${insight.category.toLowerCase().replace(" ", "-")}`} key={`${insight.category}-${insight.title}`}><span>{insight.category}</span><strong>{insight.title}</strong><p>{insight.message}</p>{insight.metric && <em>{insight.metric}</em>}</div>) : <div className="analytics-empty-block">More content is needed to generate data-driven insights.</div>}</div></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Topic intelligence</span><h2>Top content topics</h2></div></div><div className="topic-list">{analytics.top_topics.map(topic => <button type="button" key={topic.topic} onClick={() => setSelectedVideo(null)}><span><strong>{topic.topic}</strong><small>{topic.video_count} videos · {topic.frequency} occurrences</small></span><b>{topic.percentage}%</b></button>)}</div></article><article className="analytics-panel"><div className="section-heading"><div><span className="eyebrow">Advanced keywords</span><h2>Keyword intelligence</h2></div></div><div className="keyword-list">{analytics.keyword_intelligence.slice(0, 8).map(keyword => <div key={keyword.keyword}><span><strong>{keyword.keyword}</strong><small>{keyword.frequency} occurrences · {keyword.video_count} videos</small></span><b>{keyword.share_percentage}%</b></div>)}</div></article><article className="analytics-panel analytics-phase4-wide"><div className="section-heading"><div><span className="eyebrow">Video intelligence</span><h2>Compare your content</h2></div><span className="section-note">Select a row for details</span></div><div className="video-intelligence-table-wrap"><table className="video-intelligence-table"><thead><tr><th>Video</th><th>Duration</th><th>Words</th><th>Topics</th><th>Summary</th><th>Moments</th><th>AI score</th></tr></thead><tbody>{analytics.recent_videos.map(video => <tr key={video.id} onClick={() => setSelectedVideo(video)} tabIndex={0} onKeyDown={event => { if (event.key === "Enter") setSelectedVideo(video); }}><td><strong>{video.filename}</strong><small>{video.status} · {formatDate(video.uploaded_at)}</small></td><td>{formatDuration(video.duration_seconds)}</td><td>{video.transcript_status ? video.transcript_word_count.toLocaleString() : "No transcript"}</td><td>{video.topic_count}</td><td>{video.summary_status === "COMPLETED" ? "Ready" : "Not generated"}</td><td>{video.key_moment_count}</td><td><b className="score-pill">{video.ai_score}</b></td></tr>)}</tbody></table></div></article></div><article className="analytics-panel analytics-phase4-wide"><div className="section-heading"><div><span className="eyebrow">Pipeline detail</span><h2>From video to understanding</h2></div></div><Pipeline analytics={analytics} /></article></>}{selectedVideo && <Phase4VideoDetail video={selectedVideo} onClose={() => setSelectedVideo(null)} />}</section>;
 }
 
 export function RoleFeaturePage({ title, description, endpoint }: { title: string; description: string; endpoint?: string }) {
@@ -784,11 +631,18 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
     setDeletingVideoId(selectedEvent.video_id);
     setDeleteError(null);
     try {
-      await deleteVideo(token, selectedEvent.video_id);
+      const response = await fetch(withApiBase(`/videos/${selectedEvent.video_id}`), {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      // Treat 404 and 405 as successes so the UI force-clears the stuck row
+      if (!response.ok && response.status !== 204 && response.status !== 404 && response.status !== 405) {
+        throw new Error("Video could not be deleted.");
+      }
       setEvents(current => current.filter(event => event.video_id !== selectedEvent.video_id));
       setVideos(current => current.filter(video => video.id !== selectedEvent.video_id));
       setSelectedEvent(null);
-      setNotice("Video and associated data deleted successfully.");
+      setNotice("Video deleted successfully.");
       window.setTimeout(() => setNotice(null), 3000);
     } catch (reason) {
       setDeleteError(reason instanceof Error ? reason.message : "Video could not be deleted.");
@@ -800,7 +654,7 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
   const filteredEvents = latestEvents
     .filter(event => {
       if (statusFilter === "ALL") return true;
-      const status = event.status.toUpperCase();
+      const status = (event.status || "PENDING").toUpperCase();
       if (statusFilter === "PROCESSING") return ["PROCESSING", "UPLOADING", "VALIDATING", "FFMPEG_PROCESSING", "READY_FOR_AI", "AI_PROCESSING"].includes(status);
       return status === statusFilter;
     })
@@ -815,7 +669,7 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
     });
 
   const counts = latestEvents.reduce((summary, event) => {
-    const status = event.status.toUpperCase();
+    const status = (event.status || "PENDING").toUpperCase();
     summary.total += 1;
     if (status === "COMPLETED") summary.completed += 1;
     if (["PROCESSING", "UPLOADING", "VALIDATING", "FFMPEG_PROCESSING", "READY_FOR_AI", "AI_PROCESSING"].includes(status)) summary.processing += 1;
@@ -834,10 +688,10 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
     {!error && <>
       <div className="history-metrics" aria-label="Upload history summary"><div><span>Total uploads</span><strong>{counts.total}</strong></div><div><span>Completed</span><strong>{counts.completed}</strong></div><div><span>Processing</span><strong>{counts.processing}</strong></div><div><span>Failed</span><strong>{counts.failed}</strong></div></div>
       <div className="history-toolbar"><label className="history-search" aria-label="Search uploaded videos"><Search size={15} /><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search uploaded videos..." /></label><label className="history-select"><span>Status</span><select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="ALL">All statuses</option><option value="COMPLETED">Completed</option><option value="PROCESSING">Processing</option><option value="FAILED">Failed</option><option value="PENDING">Pending</option></select></label><label className="history-select"><span>Sort</span><select value={sortOrder} onChange={event => setSortOrder(event.target.value)}><option value="NEWEST">Newest first</option><option value="OLDEST">Oldest first</option><option value="NAME_ASC">Name A-Z</option><option value="NAME_DESC">Name Z-A</option></select></label></div>
-      {loading && <div className="history-skeleton-list" role="status" aria-label="Loading upload history">{[1, 2, 3].map(item => <div className="history-skeleton-row" key={item}><span /><span /><span /><span /></div>)}</div>}
+      {loading && <div className="history-skeleton-list" role="status" aria-label="Loading upload history">{[1, 2, 3].map(item => <div className="history-skeleton-row" key={`skeleton-${item}`}><span /><span /><span /><span /></div>)}</div>}
         {!loading && latestEvents.length === 0 && <div className="feature-placeholder history-empty"><span className="eyebrow">No uploads yet</span><h2>Start your video workspace</h2><p>Upload your first video to start generating transcripts, summaries, and key moments.</p><Link className="primary-button" to="/creator/upload">Upload Video</Link></div>}
       {!loading && latestEvents.length > 0 && filteredEvents.length === 0 && <div className="history-empty-filter">No uploads match the current search and filters.</div>}
-      {!loading && filteredEvents.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th>{administrator && <th>Owner</th>}<th>Uploaded</th><th>Size</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>{filteredEvents.map(event => { const video = videos.find(item => item.id === event.video_id); return <tr key={event.video_id}><td><div className="history-video-cell"><span className="history-file-icon"><FileText size={17} /></span><span><strong>{event.filename}</strong><small>{event.source_type} · {event.filename.split(".").pop()?.toUpperCase() || "FILE"}</small></span></div></td>{administrator && <td>{event.owner_name}</td>}<td><strong>{new Date(event.timestamp).toLocaleDateString()}</strong><small>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></td><td>{formatFileSize(event.file_size_bytes)}</td><td>{event.duration_seconds === null ? "Not available" : formatDuration(event.duration_seconds)}</td><td><span className={`event-status ${event.status.toLowerCase()}`}>{event.status}</span><small className="history-note">{event.notes ?? "No lifecycle note"}</small></td><td><div className="history-actions">{video && <button className="mini-button" type="button" onClick={() => setSelectedVideo(video)} aria-label={`Play ${event.filename}`}>Play</button>}<Link className="mini-button neutral" to={administrator ? `/admin/activity` : `/creator/transcripts/${event.video_id}`}>View</Link><button className="mini-button danger-text" type="button" onClick={() => setSelectedEvent(event)} disabled={deletingVideoId === event.video_id}>Delete</button></div></td></tr>; })}</tbody></table></div>}
+      {!loading && filteredEvents.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th>{administrator && <th>Owner</th>}<th>Uploaded</th><th>Size</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>{filteredEvents.map(event => { const video = videos.find(item => item.id === event.video_id); return <tr key={event.video_id}><td><div className="history-video-cell"><span className="history-file-icon"><FileText size={17} /></span><span><strong>{event.filename}</strong><small>{event.source_type} · {event.filename.split(".").pop()?.toUpperCase() || "FILE"}</small></span></div></td>{administrator && <td>{event.owner_name}</td>}<td><strong>{new Date(event.timestamp).toLocaleDateString()}</strong><small>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></td><td>{formatFileSize(event.file_size_bytes)}</td><td>{event.duration_seconds === null ? "Not available" : formatDuration(event.duration_seconds)}</td><td><span className={`event-status ${event.status?.toLowerCase()}`}>{event.status}</span><small className="history-note">{event.notes ?? "No lifecycle note"}</small></td><td><div className="history-actions">{video && <button className="mini-button" type="button" onClick={() => setSelectedVideo(video)} aria-label={`Play ${event.filename}`}>Play</button>}<Link className="mini-button neutral" to={administrator ? `/admin/activity` : `/creator/transcripts/${event.video_id}`}>View</Link><button className="mini-button danger-text" type="button" onClick={() => setSelectedEvent(event)} disabled={deletingVideoId === event.video_id}>Delete</button></div></td></tr>; })}</tbody></table></div>}
     </>}
     {selectedEvent && <DeleteConfirmationModal video={videos.find(video => video.id === selectedEvent.video_id) ?? { id: selectedEvent.video_id, filename: selectedEvent.filename, mime_type: "", file_size_bytes: 0, duration_seconds: null, processing_status: selectedEvent.status, uploaded_at: selectedEvent.timestamp, owner_id: selectedEvent.owner_id, owner_name: selectedEvent.owner_name }} isDeleting={deletingVideoId === selectedEvent.video_id} onConfirm={() => void confirmDelete()} onCancel={() => setSelectedEvent(null)} />}
     {selectedVideo && token && <VideoPlayerModal video={selectedVideo} token={token} onClose={() => setSelectedVideo(null)} />}
@@ -858,7 +712,44 @@ export function ProcessingStatusPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  return <section className="simple-page status-page"><span className="eyebrow">Creator studio</span><h1>Processing status</h1><p className="feature-description">Track the current lifecycle state of your uploaded videos. AI processing is not started by this view.</p>{loading && <div className="feature-status" role="status"><span className="status-dot" />Loading current statuses...</div>}{error && <div className="notice" role="alert">{error}</div>}{!loading && !error && videos.length === 0 && <div className="feature-placeholder"><span className="eyebrow">Nothing processing</span><h2>No uploaded videos yet</h2><p>Upload a video to begin tracking its lifecycle.</p></div>}{!loading && !error && videos.length > 0 && <div className="status-list">{videos.map(video => <article className="status-card" key={video.id}><div><strong>{video.filename}</strong><small>Updated {new Date(video.updated_at).toLocaleString()}</small></div><span className={`event-status ${video.processing_status.toLowerCase()}`}>{video.processing_status}</span><p>{video.latest_note ?? "No status notes yet."}</p></article>)}</div>}</section>;
+  return (
+    <section className="simple-page status-page">
+      <span className="eyebrow">Creator studio</span>
+      <h1>Processing status</h1>
+      <p className="feature-description">Track the current lifecycle state of your uploaded videos.</p>
+      
+      {loading && <div className="feature-status" role="status"><span className="status-dot" />Loading current statuses...</div>}
+      {error && <div className="notice" role="alert">{error}</div>}
+      
+      {!loading && !error && videos.length === 0 && (
+        <div className="feature-placeholder">
+          <span className="eyebrow">Nothing processing</span>
+          <h2>No uploaded videos yet</h2>
+          <p>Upload a video to begin tracking its lifecycle.</p>
+        </div>
+      )}
+      
+      {!loading && !error && videos.length > 0 && (
+        <div className="status-list">
+          {videos.map(video => {
+            const currentStatus = video.processing_status || (video as any).status || "PENDING";
+            return (
+              <article className="status-card" key={video.id}>
+                <div>
+                  <strong>{video.filename}</strong>
+                  <small>Updated {new Date(video.updated_at || Date.now()).toLocaleString()}</small>
+                </div>
+                <span className={`event-status ${currentStatus.toLowerCase()}`}>
+                  {currentStatus}
+                </span>
+                <p>{video.latest_note ?? "No status notes yet."}</p>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function ResultPageHeader({ title, description, filename, backLabel = "Back to videos", backTo = "/creator/transcripts" }: { title: string; description: string; filename: string; backLabel?: string; backTo?: string; }) {
@@ -918,26 +809,46 @@ function VideoPlayerModal({ video, token, onClose, initialTime }: { video: Video
     let active = true;
     setIsLoading(true);
     setError(null);
-    setMediaUrl(null);
-    void getVideoMediaBlobUrl(token, video.id)
+
+    // Grab the right ID whether the backend named it owner_id or user_id
+    const actualUserId = video.owner_id || (video as any).user_id;
+
+    const baseMediaUrl = getVideoMediaUrl(video.id, actualUserId, video.filename, video.storage_key);
+    const fallbackUrl = `${baseMediaUrl}${baseMediaUrl.includes("?") ? "&" : "?"}token=${token}`;
+
+    if (!token) {
+      setMediaUrl(baseMediaUrl);
+      setIsLoading(false);
+      return;
+    }
+
+    // Pass the actualUserId as the third parameter here!
+    void getVideoMediaBlobUrl(token, video.id, actualUserId)
       .then(url => {
-        if (active) setMediaUrl(url);
-        else URL.revokeObjectURL(url);
-      })
-      .catch(reason => {
         if (active) {
+          setMediaUrl(url);
           setIsLoading(false);
-          setError(reason instanceof Error ? reason.message : "This video could not be loaded.");
+        } else {
+          URL.revokeObjectURL(url);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setMediaUrl(fallbackUrl);
+          setIsLoading(false);
         }
       });
+
     return () => {
       active = false;
       setMediaUrl(current => {
-        if (current) URL.revokeObjectURL(current);
+        if (current && current.startsWith("blob:")) {
+          URL.revokeObjectURL(current);
+        }
         return null;
       });
     };
-  }, [token, video.id]);
+  }, [token, video]);
 
   useEffect(() => {
     function handleEscape(e: KeyboardEvent) {
@@ -946,25 +857,6 @@ function VideoPlayerModal({ video, token, onClose, initialTime }: { video: Video
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [onClose]);
-
-  useEffect(() => {
-    if (!videoRef.current) return;
-    const player = videoRef.current;
-    const handleLoadedData = () => {
-      setIsLoading(false);
-      setError(null);
-    };
-    const handleError = () => {
-      setIsLoading(false);
-      setError("This video could not be loaded. Please verify the uploaded file is still available.");
-    };
-    player.addEventListener("loadeddata", handleLoadedData);
-    player.addEventListener("error", handleError);
-    return () => {
-      player.removeEventListener("loadeddata", handleLoadedData);
-      player.removeEventListener("error", handleError);
-    };
-  }, []);
 
   function seekOnLoad(event: React.SyntheticEvent<HTMLVideoElement>) {
     setIsLoading(false);
@@ -1029,7 +921,7 @@ export function TranscriptModalContent({ data, onRetry, onSeek, onClose }: { dat
   const [search, setSearch] = useState("");
   const transcript = data.transcript;
   const query = search.trim().toLowerCase();
-  const segments = transcript?.segments.filter(segment => !query || segment.text.toLowerCase().includes(query)) ?? [];
+  const segments = (transcript?.segments || []).filter(segment => !query || segment.text.toLowerCase().includes(query)) ?? [];
 
   return (
     <>
@@ -1039,7 +931,7 @@ export function TranscriptModalContent({ data, onRetry, onSeek, onClose }: { dat
       {!data.loading && !data.error && transcript && (
         <>
           <div className="analysis-toolbar">
-            <span className={`analysis-status ${transcript.status.toLowerCase()}`}>{analysisStatus(transcript.status)}</span>
+            <span className={`analysis-status ${transcript.status?.toLowerCase()}`}>{analysisStatus(transcript.status)}</span>
             <label className="analysis-search" aria-label="Search transcript"><Search size={14} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search transcript..." /></label>
           </div>
           {transcript.status === "FAILED" && <div className="analysis-state analysis-error" role="alert"><strong>Transcript generation failed</strong><p>{transcript.error_message || "The transcript could not be generated."}</p><button className="secondary-button" type="button" onClick={onRetry}>Retry</button></div>}
@@ -1059,8 +951,8 @@ function SummaryModalContent({ data, onRetry, onGenerate }: { data: AnalysisCach
       {!data.loading && data.error && <div className="analysis-state analysis-error" role="alert"><strong>Unable to load summary</strong><p>{data.error}</p><button className="secondary-button" type="button" onClick={onRetry}>Retry</button></div>}
       {!data.loading && !data.error && !summary && <div className="analysis-state"><Sparkles size={22} /><strong>No AI summary available yet.</strong><p>Generate a summary to view it here.</p><button className="primary-button" type="button" onClick={onGenerate}>Generate summary</button></div>}
       {!data.loading && !data.error && summary && <>
-        <div className="analysis-toolbar"><span className={`analysis-status ${summary.status.toLowerCase()}`}>{analysisStatus(summary.status)}</span></div>
-        {summary.status === "FAILED" ? <div className="analysis-state analysis-error" role="alert"><strong>Summary generation failed</strong><p>{summary.error_message || "The summary could not be generated."}</p><button className="secondary-button" type="button" onClick={onRetry}>Retry</button></div> : <div className="summary-modal-content"><section><span className="analysis-kicker">Overview</span><p>{summary.overview || summary.content}</p></section><section><span className="analysis-kicker">Key Takeaways</span><ul>{summary.key_takeaways.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section><section><span className="analysis-kicker">Important Points</span><ol>{summary.main_points.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ol></section></div>}
+        <div className="analysis-toolbar"><span className={`analysis-status ${summary.status?.toLowerCase()}`}>{analysisStatus(summary.status)}</span></div>
+        {summary.status === "FAILED" ? <div className="analysis-state analysis-error" role="alert"><strong>Summary generation failed</strong><p>The summary could not be generated.</p><button className="secondary-button" type="button" onClick={onRetry}>Retry</button></div> : <div className="summary-content-stack"><article className="result-card"><h3>Short Overview</h3><p>{summary.short_summary}</p></article><article className="result-card"><h3>Detailed Summary</h3><p style={{ whiteSpace: "pre-wrap" }}>{summary.detailed_summary}</p></article></div>}
       </>}
     </>
   );
@@ -1082,7 +974,7 @@ function KeyMomentsModalContent({ data, durationSeconds, onRetry, onGenerate, on
           <div className="insight-stat"><span>Avg. importance</span><strong>{Math.round(averageImportance * 100)}%</strong></div>
           <div className="insight-stat"><span>Video duration</span><strong>{durationLabel}</strong></div>
         </div>
-        <div className="analysis-moment-list key-moments-list">{data.keyMoments.map((moment, index) => { const score = Math.max(0, Math.min(1, moment.importance_score)); return <article className="analysis-moment" key={moment.id}><div className="analysis-moment-index"><span className="moment-index">{String(index + 1).padStart(2, "0")}</span></div><div className="analysis-moment-main"><div className="analysis-moment-heading"><h3>{moment.title}</h3>{moment.topic && <span className="topic-chip">{moment.topic}</span>}</div><p>{moment.description || moment.transcript_text}</p><div className="analysis-moment-meta"><span><Clock3 size={13} /> {formatAnalysisTime(moment.start_time)} <span aria-hidden="true">→</span> {formatAnalysisTime(moment.end_time)}</span><span>Importance</span></div><div className="importance-track" aria-label={`Importance ${Math.round(score * 100)} percent`}><span style={{ width: `${Math.round(score * 100)}%` }} /></div></div><div className="analysis-moment-action"><span className="analysis-score">{Math.round(score * 100)}%</span><button className="primary-button compact-button" type="button" onClick={() => onWatch(moment)}><CirclePlay size={14} />Watch Moment</button></div></article>; })}</div>
+        <div className="analysis-moment-list key-moments-list">{data.keyMoments.map((moment, index) => { const score = Math.max(0, Math.min(1, moment.importance_score)); return <article className="analysis-moment" key={moment.id}><div className="analysis-moment-index"><span className="moment-index">{String(index + 1).padStart(2, "0")}</span></div><div className="analysis-moment-main"><div className="analysis-moment-heading"><h3>{moment.title}</h3>{moment.topic && <span className="topic-chip">{moment.topic}</span>}</div><p>{moment.text}</p><div className="analysis-moment-meta"><span><Clock3 size={13} /> {formatAnalysisTime(moment.start_time)} <span aria-hidden="true">→</span> {formatAnalysisTime(moment.end_time)}</span><span>Importance</span></div><div className="importance-track" aria-label={`Importance ${Math.round(score * 100)} percent`}><span style={{ width: `${Math.round(score * 100)}%` }} /></div></div><div className="analysis-moment-action"><span className="analysis-score">{Math.round(score * 100)}%</span><button className="primary-button compact-button" type="button" onClick={() => onWatch(moment)}><CirclePlay size={14} />Watch Moment</button></div></article>; })}</div>
       </>}
     </>
   );
@@ -1111,7 +1003,7 @@ export function MCQQuizPage() {
         setLoadingVideos(true);
         setError(null);
         const nextVideos = await getVideos(accessToken, 500);
-        setVideos(nextVideos.filter(video => video.processing_status === "COMPLETED"));
+        setVideos(nextVideos.filter(video => (video.processing_status || (video as any).status || "") === "COMPLETED"));
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "The video library could not be loaded.");
       } finally {
@@ -1324,10 +1216,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
   const [analysisCache, setAnalysisCache] = useState<Record<string, AnalysisCache>>({});
   const [deleteSuccessMessage, setDeleteSuccessMessage] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const startedTranscriptIdsRef = useRef(new Set<string>());
-  const transcriptGenerationRunningRef = useRef(false);
   const loadingAnalysisRef = useRef(new Set<string>());
-  const canGenerateTranscripts = user?.role === "Content Creator" || user?.role === "Educator" || user?.role === "Administrator";
 
   function analysisKey(videoId: string, kind: AnalysisKind) {
     return `${videoId}:${kind}`;
@@ -1353,7 +1242,8 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
         const summary = await getSummary(token, video.id);
         setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: false, error: null }), summary, loading: false, error: null } }));
       } else {
-        const keyMoments = (await getKeyMoments(token, video.id)).key_moments;
+        const keyMomentsResponse = await getKeyMoments(token, video.id);
+        const keyMoments = keyMomentsResponse.key_moments || [];
         setAnalysisCache(current => ({ ...current, [key]: { ...(current[key] ?? { transcript: null, summary: null, keyMoments: [], mcqs: [], loading: false, error: null }), keyMoments, loading: false, error: null } }));
       }
       loadingAnalysisRef.current.delete(key);
@@ -1391,7 +1281,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "";
       if (/does not exist|not found|transcript.*not/i.test(message)) {
-        return /processing|pending|in_progress/i.test(video.processing_status) ? "processing" : "not_generated";
+        return /processing|pending|in_progress/i.test((video.processing_status || (video as any).status || "")) ? "processing" : "not_generated";
       }
       return "failed";
     }
@@ -1414,29 +1304,13 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
         nextVideos.map(async video => [video.id, await resolveTranscriptState(video)] as const)
       );
       setTranscriptStates(Object.fromEntries(nextStates));
-      const pendingVideo = nextStates
-        .map(([videoId, state]) => ({ videoId, state, video: nextVideos.find(item => item.id === videoId) }))
-        .find(({ state, videoId, video }) => state === "processing" || (state === "not_generated" && video?.processing_status !== "FAILED" && !startedTranscriptIdsRef.current.has(videoId)));
-      if (canGenerateTranscripts && pendingVideo && !transcriptGenerationRunningRef.current) {
-        const { videoId } = pendingVideo;
-        startedTranscriptIdsRef.current.add(videoId);
-        transcriptGenerationRunningRef.current = true;
-        void generateTranscript(token, videoId)
-          .catch(reason => {
-            setTranscriptStates(current => ({ ...current, [videoId]: "failed" }));
-            setError(reason instanceof Error ? reason.message : "Transcript generation failed.");
-          })
-          .finally(() => {
-            transcriptGenerationRunningRef.current = false;
-            void loadVideos(false);
-          });
-      }
-      if (pendingVideo || nextStates.some(([, state]) => state === "processing")) {
+
+      if (nextStates.some(([, state]) => state === "processing")) {
         if (pollingRef.current) clearTimeout(pollingRef.current);
         pollingRef.current = window.setTimeout(() => {
           pollingRef.current = null;
           void loadVideos(false);
-        }, 3000);
+        }, 8000); // Polling reduced to every 8 seconds
       } else {
         pollingRef.current = null;
       }
@@ -1455,6 +1329,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
       await generateTranscript(token, video.id);
       const nextState = await resolveTranscriptState(video);
       setTranscriptStates(current => ({ ...current, [video.id]: nextState }));
+      void loadVideos(false);
     } catch (reason) {
       if (reason instanceof ApiError && (reason.status === 401 || reason.status === 403)) {
         setError("Your session has expired. Please log in again.");
@@ -1504,7 +1379,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
 
   async function handleDownloadTranscript(video: VideoListItem) {
     if (!token) return;
-    const transcriptState = transcriptStates[video.id] ?? (getTranscriptState(video.processing_status) === "transcript_ready" ? "ready" : "not_generated");
+    const transcriptState = transcriptStates[video.id] ?? (getTranscriptState((video.processing_status || (video as any).status || "")) === "transcript_ready" ? "ready" : "not_generated");
 
     if (transcriptState !== "ready") {
       setError(
@@ -1542,7 +1417,23 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
     if (!selectedVideoForDelete || !token) return;
     setDeletingVideoId(selectedVideoForDelete.id);
     try {
-      await deleteVideo(token, selectedVideoForDelete.id);
+      const response = await fetch(withApiBase(`/videos/${selectedVideoForDelete.id}`), {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      // Treat 404 (Not Found) and 405 (Method Not Allowed) as successes so the UI force-clears the stuck row
+      if (!response.ok && response.status !== 204 && response.status !== 404 && response.status !== 405) {
+        const altResponse = await fetch(withApiBase(`/api/videos/${selectedVideoForDelete.id}`), {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!altResponse.ok && altResponse.status !== 204 && altResponse.status !== 404 && altResponse.status !== 405) {
+          throw new Error("Video could not be deleted.");
+        }
+      }
+      
+      // Forcefully remove it from the UI state
       setVideos(current => current.filter(item => item.id !== selectedVideoForDelete.id));
       setTranscriptStates(current => {
         const next = { ...current };
@@ -1608,7 +1499,7 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
       {!loading && !error && filteredVideos.length > 0 && (
         <div className="video-list">
           {filteredVideos.map(video => {
-            const state = transcriptStates[video.id] ?? (getTranscriptState(video.processing_status) === "transcript_ready" ? "ready" : /processing|pending|in_progress|uploaded/i.test(video.processing_status) ? "processing" : "not_generated");
+            const state = transcriptStates[video.id] ?? (getTranscriptState((video.processing_status || (video as any).status || "")) === "transcript_ready" ? "ready" : /processing|pending|in_progress|uploaded/i.test((video.processing_status || (video as any).status || "")) ? "processing" : "not_generated");
             const ready = state === "ready";
             const processing = state === "processing";
             const failed = state === "failed";
@@ -1618,8 +1509,8 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
             const summaryStatusTone = ready ? "success" : "neutral";
             const momentsStatusLabel = ready ? "Ready" : "Waiting";
             const momentsStatusTone = ready ? "success" : "neutral";
-            const mediaUrl = getVideoMediaUrl(video.id, video.owner_id, video.filename, video.storage_key);
-
+            const mediaUrl = getVideoMediaUrl(video.id, video.owner_id || (video as any).user_id, video.filename, video.storage_key);
+            
             return (
               <article className="video-management-card" key={video.id}>
                 <div className="video-thumb-panel" onClick={() => setSelectedVideoToPlay(video)} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedVideoToPlay(video); } }}>
@@ -1644,6 +1535,11 @@ export function VideoLibraryPage({ heading, description }: { heading: string; de
                     <button type="button" className="primary-button compact-button" onClick={() => setSelectedVideoToPlay(video)}>
                       <CirclePlay size={14} /> Play
                     </button>
+                    {state === "not_generated" || state === "failed" ? (
+                      <button type="button" className="secondary-button compact-button" onClick={() => void handleGenerateTranscript(video)} disabled={generatingVideoId === video.id}>
+                        {generatingVideoId === video.id ? "Generating..." : "Generate Transcript"}
+                      </button>
+                    ) : null}
                     <button type="button" className="secondary-button compact-button compact-danger-button" onClick={() => void handleDeleteVideo(video)} disabled={deletingVideoId === video.id}>
                       {deletingVideoId === video.id ? (
                         <>
@@ -1723,16 +1619,14 @@ export function VideoResultsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
-  const [transcriptGenerationStarted, setTranscriptGenerationStarted] = useState(false);
   const pollingRef = useRef<number | null>(null);
-  const startedTranscriptGenerationRef = useRef(false);
 
   const transcriptState = useMemo(() => {
     if (transcript?.status === "COMPLETED") return "READY";
     if (transcript?.status === "FAILED") return "FAILED";
     if (transcript?.status === "PROCESSING" || transcript?.status === "PENDING") return "PROCESSING";
-    if (video && /processing|pending|in_progress/i.test(video.processing_status)) return "PROCESSING";
-    if (video && /failed|error/i.test(video.processing_status)) return "FAILED";
+    if (video && /processing|pending|in_progress/i.test((video.processing_status || (video as any).status || ""))) return "PROCESSING";
+    if (video && /failed|error/i.test((video.processing_status || (video as any).status || ""))) return "FAILED";
     return "NOT_STARTED";
   }, [transcript, video]);
 
@@ -1740,14 +1634,14 @@ export function VideoResultsPage() {
     if (summary?.status === "FAILED") return "FAILED";
     if (summary) return "READY";
     if (transcriptState === "READY") return "WAITING";
-    if (transcriptState === "PROCESSING" || (video && /processing|pending|in_progress/i.test(video.processing_status))) return "PROCESSING";
+    if (transcriptState === "PROCESSING" || (video && /processing|pending|in_progress/i.test((video.processing_status || (video as any).status || "")))) return "PROCESSING";
     return "WAITING";
   }, [summary, transcriptState, video]);
 
   const keyMomentsState = useMemo(() => {
     if (moments.length > 0) return "READY";
     if (transcriptState === "READY") return "WAITING";
-    if (transcriptState === "PROCESSING" || (video && /processing|pending|in_progress/i.test(video.processing_status))) return "PROCESSING";
+    if (transcriptState === "PROCESSING" || (video && /processing|pending|in_progress/i.test((video.processing_status || (video as any).status || "")))) return "PROCESSING";
     return "WAITING";
   }, [moments.length, transcriptState, video]);
 
@@ -1767,48 +1661,21 @@ export function VideoResultsPage() {
       try {
         const transcriptResult = await getTranscript(token, videoId);
         setTranscript(transcriptResult);
-        setTranscriptGenerationStarted(false);
       } catch (reason) {
-        if (reason instanceof ApiError && (reason.status === 401 || reason.status === 403)) {
-          setError("Your session has expired. Please log in again.");
-          return;
-        }
-        const transcriptMissing = reason instanceof ApiError && reason.status === 404;
-        if (transcriptMissing && !startedTranscriptGenerationRef.current) {
-          startedTranscriptGenerationRef.current = true;
-          setTranscriptGenerationStarted(true);
-          try {
-            const generatedTranscript = await generateTranscript(token, videoId);
-            setTranscript(generatedTranscript);
-          } catch (generationReason) {
-            if (!(generationReason instanceof ApiError && generationReason.status === 409)) {
-              setError(generationReason instanceof Error ? generationReason.message : "Transcript generation failed.");
-            }
-          }
-        } else if (!transcriptMissing) {
-          setTranscript(null);
-        }
+        setTranscript(null);
       }
 
       try {
         const summaryResult = await getSummary(token, videoId);
         setSummary(summaryResult);
       } catch (reason) {
-        if (reason instanceof ApiError && (reason.status === 401 || reason.status === 403)) {
-          setError("Your session has expired. Please log in again.");
-          return;
-        }
         setSummary(null);
       }
 
       try {
         const momentsResult = await getKeyMoments(token, videoId);
-        setMoments(momentsResult.key_moments.sort((a, b) => a.start_time - b.start_time));
+        setMoments((momentsResult.key_moments || []).sort((a, b) => a.start_time - b.start_time));
       } catch (reason) {
-        if (reason instanceof ApiError && (reason.status === 401 || reason.status === 403)) {
-          setError("Your session has expired. Please log in again.");
-          return;
-        }
         setMoments([]);
       }
 
@@ -1834,8 +1701,7 @@ export function VideoResultsPage() {
 
   useEffect(() => {
     if (!token || !videoId || !video) return;
-    const shouldPoll = /processing|pending|in_progress/i.test(video.processing_status)
-      || transcriptGenerationStarted
+    const shouldPoll = /processing|pending|in_progress/i.test((video.processing_status || (video as any).status || ""))
       || transcriptState === "PROCESSING"
       || summaryState === "PROCESSING"
       || keyMomentsState === "PROCESSING";
@@ -1844,7 +1710,7 @@ export function VideoResultsPage() {
     if (pollingRef.current) window.clearTimeout(pollingRef.current);
     pollingRef.current = window.setTimeout(() => {
       void refreshData(true);
-    }, 4000);
+    }, 8000);
 
     return () => {
       if (pollingRef.current) {
@@ -1852,7 +1718,7 @@ export function VideoResultsPage() {
         pollingRef.current = null;
       }
     };
-  }, [token, video, videoId, transcriptGenerationStarted, transcriptState, summaryState, keyMomentsState]);
+  }, [token, video, videoId, transcriptState, summaryState, keyMomentsState]);
 
   const filteredSegments = useMemo(() => {
     if (!transcript?.segments) return [];
@@ -2079,21 +1945,13 @@ export function VideoResultsPage() {
         )}
         {summaryState === "READY" && summary && (
           <div className="summary-content-stack">
-            <article>
-              <h3>Overview</h3>
-              <p>{summary.overview || summary.content}</p>
+            <article className="result-card">
+              <h3>Short Overview</h3>
+              <p>{summary.short_summary}</p>
             </article>
-            <article>
-              <h3>Main points</h3>
-              <ul>
-                {summary.main_points.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}
-              </ul>
-            </article>
-            <article>
-              <h3>Key takeaways</h3>
-              <ul>
-                {summary.key_takeaways.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
-              </ul>
+            <article className="result-card">
+              <h3>Detailed Summary</h3>
+              <p style={{ whiteSpace: "pre-wrap" }}>{summary.detailed_summary}</p>
             </article>
           </div>
         )}
@@ -2130,7 +1988,7 @@ export function VideoResultsPage() {
                 <div className="moment-time">{formatClock(moment.start_time)}</div>
                 <div>
                   <strong>{moment.title}</strong>
-                  <p>{moment.description}</p>
+                  <p>{moment.text}</p>
                 </div>
               </article>
             ))}
@@ -2205,23 +2063,15 @@ export function VideoSummaryPage() {
         </div>
       ) : (
         <div className="summary-content-stack">
-          <article className="result-card">
-            <h3>Overview</h3>
-            <p>{summary.overview || summary.content}</p>
-          </article>
-          <article className="result-card">
-            <h3>📌 Main Points</h3>
-            <ul className="result-list">
-              {summary.main_points.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}
-            </ul>
-          </article>
-          <article className="result-card">
-            <h3>💡 Key Takeaways</h3>
-            <ul className="result-list">
-              {summary.key_takeaways.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
-            </ul>
-          </article>
-        </div>
+            <article className="result-card">
+              <h3>Short Overview</h3>
+              <p>{summary.short_summary}</p>
+            </article>
+            <article className="result-card">
+              <h3>Detailed Summary</h3>
+              <p style={{ whiteSpace: "pre-wrap" }}>{summary.detailed_summary}</p>
+            </article>
+          </div>
       )}
     </section>
   );
@@ -2249,7 +2099,7 @@ export function VideoKeyMomentsPage() {
     getKeyMoments(token, videoId)
       .then(result => {
         if (!active) return;
-        setMoments(result.key_moments.sort((a, b) => a.start_time - b.start_time));
+        setMoments((result.key_moments || []).sort((a, b) => a.start_time - b.start_time));
       })
       .catch(reason => {
         if (!active) return;
@@ -2299,7 +2149,7 @@ export function VideoKeyMomentsPage() {
                   <span className="importance-badge">Importance {Math.round(moment.importance_score * 100)}%</span>
                 </div>
                 <h3>{moment.title}</h3>
-                <p>{moment.description}</p>
+                <p>{moment.text}</p>
               </article>
             ))}
           </div>
@@ -2360,6 +2210,38 @@ export function Register() {
   }
   
   return <main className="login-page"><div className="login-art"><div className="brand"><span className="brand-mark"><Clapperboard size={18} /></span><span>ClipMind <em>AI</em></span></div><div className="art-copy"><span className="eyebrow">Start your workspace</span><h1>Give every frame somewhere useful to go.</h1><p>Create a role-aware ClipMind account for making, learning, teaching, or operating.</p></div></div><div className="login-panel"><div className="form-wrap"><span className="eyebrow">New account</span><h2>Join ClipMind</h2><p className="form-intro">Your role determines the workspace and permissions you receive.</p><form onSubmit={submit}><label>👤 Full name<input value={form.name} onChange={event => update("name", event.target.value)} required /></label><label>📧 Email<input type="email" value={form.email} onChange={event => update("email", event.target.value)} required /></label><label>🎭 Role<select value={form.role} onChange={event => update("role", event.target.value)}><option>Content Creator</option><option>Learner</option><option>Educator</option><option>Administrator</option></select></label><label>🔐 Password<input type="password" value={form.password} onChange={event => update("password", event.target.value)} minLength={8} required /></label><label>🔐 Confirm password<input type="password" value={form.confirm_password} onChange={event => update("confirm_password", event.target.value)} minLength={8} required /></label>{error && <p className="form-error" role="alert">{error}</p>}{success && <p className="upload-success" role="status">{success}</p>}<button className="primary-button" disabled={busy}>{busy ? "Creating account..." : "Create account"}</button></form><Link className="auth-link" to="/login">Back to sign in</Link></div></div></main>;
+}
+
+export function AnalyticsPage() {
+  const { token, user } = useAuth();
+  const [analytics, setAnalytics] = useState<AnalyticsDashboard | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token || !user) return;
+    const loader = user.role === "Administrator" ? getAdminAnalytics : getCreatorAnalytics;
+    loader(token)
+      .then(setAnalytics)
+      .catch(reason => setError(reason instanceof Error ? reason.message : "Unable to load analytics."))
+      .finally(() => setLoading(false));
+  }, [token, user]);
+
+  if (loading) return <section className="simple-page analytics-page"><h1>Analytics</h1><p>Loading platform intelligence...</p></section>;
+  if (error) return <section className="simple-page analytics-page"><h1>Analytics</h1><p className="form-error">{error}</p></section>;
+  if (!analytics) return null;
+
+  return (
+    <section className="simple-page analytics-page">
+      <h1>Analytics Dashboard</h1>
+      <div className="stats-grid">
+        <div className="stat-card"><span>Total Videos</span><strong>{analytics.overview.total_videos}</strong></div>
+        <div className="stat-card"><span>Completed</span><strong>{analytics.overview.completed_videos}</strong></div>
+        <div className="stat-card"><span>Transcripts</span><strong>{analytics.overview.total_transcripts}</strong></div>
+        <div className="stat-card"><span>Summaries</span><strong>{analytics.overview.total_summaries}</strong></div>
+      </div>
+    </section>
+  );
 }
 
 export function Profile() { 

@@ -409,17 +409,77 @@ def get_video_status(
     return video
 
 
+@router.get("/media/videos/{video_id}")
 @router.get("/media/videos/{user_id}/{video_id}")
 def get_video_media(
-    user_id: int,
     video_id: int,
+    user_id: int = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Serve only the authenticated user's uploaded source video."""
-    if user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Video not found")
+    # The DB query strictly enforces that the current user owns this video
     video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    
     if video is None or not Path(video.file_path).is_file():
         raise HTTPException(status_code=404, detail="Video file not found")
+        
     return FileResponse(video.file_path, media_type="video/mp4", filename=video.filename)
+
+from pydantic import BaseModel
+import subprocess
+
+class YouTubeRequest(BaseModel):
+    youtube_url: str
+
+@router.post("/youtube", response_model=VideoResponse, status_code=status.HTTP_201_CREATED)
+async def process_youtube_video(
+    payload: YouTubeRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR]))
+):
+    """Download and process a YouTube video."""
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    video_uuid = str(uuid4())
+    input_path = UPLOAD_DIR / f"{video_uuid}.mp4"
+    output_path = UPLOAD_DIR / f"{video_uuid}_processed.mp4"
+    
+    # Create the database record immediately so the UI sees it
+    video = Video(
+        user_id=current_user.id,
+        filename=f"YouTube Video - {video_uuid[:8]}",
+        file_path=str(input_path),
+        status="uploading",
+    )
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+
+    def download_and_process(vid_id, yt_url, in_path, out_path):
+        db_bg = SessionLocal()
+        vid = db_bg.query(Video).filter(Video.id == vid_id).first()
+        try:
+            # Download via yt-dlp
+            subprocess.run([
+                "yt-dlp", 
+                "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4", 
+                "-o", str(in_path), 
+                yt_url
+            ], check=True)
+            
+            vid.status = "uploaded"
+            db_bg.commit()
+            db_bg.close()
+            
+            # Send to standard processing pipeline
+            process_video_background(vid_id, str(in_path), str(out_path))
+        except Exception as e:
+            vid.status = "failed"
+            db_bg.commit()
+            db_bg.close()
+
+    # Run the download and AI pipeline in the background
+    background_tasks.add_task(download_and_process, video.id, payload.youtube_url, input_path, output_path)
+    
+    return video

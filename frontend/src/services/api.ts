@@ -302,24 +302,23 @@ export class ApiError extends Error {
 
 const API_URL = API_BASE_URL;
 const INVALID_TOKEN_VALUES = new Set(["", "undefined", "null"]);
-export const AUTH_EXPIRED_EVENT = "clipmind:auth-expired";
 
 export function getVideoMediaUrl(videoId: string, userId: string, filename: string, storageKey?: string | null) {
   if (storageKey && storageKey.trim()) {
     return `${API_URL}/media/${encodeURI(storageKey.trim())}`;
   }
-
-  const extension = filename.includes(".") ? filename.slice(filename.lastIndexOf(".")) : "";
-  const safeFilename = filename.trim() || `${videoId}${extension || ".mp4"}`;
-  const suffix = safeFilename.includes(".") ? safeFilename.slice(safeFilename.lastIndexOf(".")) : extension || ".mp4";
-  return `${API_URL}/media/videos/${userId}/${videoId}${suffix}`;
+  // Simplified to drop the undefined userId and the .mp4 suffix
+  return `${API_URL}/videos/media/videos/${videoId}`;
 }
 
 export async function getVideoMediaBlobUrl(token: string, videoId: string, userId?: string | number) {
   ensureValidAuthorization(token);
-  const response = await fetch(`${API_URL}/videos/media/videos/${userId ?? ""}/${videoId}`, {
+  
+  // Simplified to drop the undefined userId
+  const response = await fetch(`${API_URL}/videos/media/videos/${videoId}`, {
     headers: getAuthHeaders(token),
   });
+  
   if (!response.ok) {
     const message = await responseError(response, "Video playback could not be loaded.");
     throw new ApiError(response.status, message);
@@ -426,7 +425,7 @@ export function register(payload: RegistrationPayload) {
   return request<{ id: number; name: string; email: string; role: Role; created_at: string }>("/auth/register", {
     method: "POST",
     body: JSON.stringify({
-      name: payload.full_name.trim(),
+      name: payload.name.trim(),
       email: payload.email.trim(),
       password: payload.password,
       role: payload.role,

@@ -1,8 +1,8 @@
-"""unified_schema
+"""fresh_start
 
-Revision ID: 8eb15ac9ed8b
+Revision ID: 2475b4481c45
 Revises: 
-Create Date: 2026-09-26 16:23:27.479928
+Create Date: 2026-10-05 16:19:21.074590
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '8eb15ac9ed8b'
+revision: str = '2475b4481c45'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -27,7 +27,7 @@ def upgrade() -> None:
     sa.Column('email', sa.String(), nullable=False),
     sa.Column('password', sa.String(), nullable=False),
     sa.Column('role', sa.String(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
@@ -38,8 +38,14 @@ def upgrade() -> None:
     sa.Column('filename', sa.String(), nullable=False),
     sa.Column('file_path', sa.String(), nullable=False),
     sa.Column('status', sa.String(), nullable=False),
-    sa.Column('uploaded_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.Column('uploaded_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('processing_stage', sa.String(), nullable=True),
+    sa.Column('processing_error_code', sa.String(), nullable=True),
+    sa.Column('processing_error_message', sa.Text(), nullable=True),
+    sa.Column('processing_started_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('processing_completed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('duration_seconds', sa.Float(), nullable=True),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_videos_id'), 'videos', ['id'], unique=False)
@@ -53,7 +59,7 @@ def upgrade() -> None:
     sa.Column('importance_score', sa.Float(), nullable=False),
     sa.Column('text', sa.Text(), nullable=False),
     sa.Column('highlight_path', sa.String(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.ForeignKeyConstraint(['video_id'], ['videos.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -64,12 +70,16 @@ def upgrade() -> None:
     sa.Column('text', sa.Text(), nullable=True),
     sa.Column('language', sa.String(length=10), nullable=True),
     sa.Column('segments', sa.JSON(), nullable=True),
-    sa.Column('error_message', sa.Text(), nullable=True),
-    sa.Column('status', sa.Enum('PENDING', 'NOT_STARTED', 'PROCESSING', 'COMPLETED', 'FAILED', name='transcriptstatus'), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('status', sa.Enum('PENDING', 'NOT_STARTED', 'PROCESSING', 'COMPLETED', 'FAILED', name='transcriptstatus'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('error_code', sa.String(), nullable=True),
+    sa.Column('error_message', sa.Text(), nullable=True),
+    sa.Column('processing_started_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('processing_completed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('processing_duration_seconds', sa.Float(), nullable=True),
     sa.Column('video_id', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['video_id'], ['videos.id'], ),
+    sa.ForeignKeyConstraint(['video_id'], ['videos.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('video_id')
     )
@@ -78,11 +88,16 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('short_summary', sa.Text(), nullable=True),
     sa.Column('detailed_summary', sa.Text(), nullable=True),
-    sa.Column('status', sa.Enum('NOT_STARTED', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', name='summarystatus'), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('status', sa.Enum('PENDING', 'NOT_STARTED', 'PROCESSING', 'COMPLETED', 'FAILED', name='summarystatus'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('error_code', sa.String(), nullable=True),
+    sa.Column('error_message', sa.Text(), nullable=True),
+    sa.Column('processing_started_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('processing_completed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('processing_duration_seconds', sa.Float(), nullable=True),
     sa.Column('transcript_id', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['transcript_id'], ['transcripts.id'], ),
+    sa.ForeignKeyConstraint(['transcript_id'], ['transcripts.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('transcript_id')
     )

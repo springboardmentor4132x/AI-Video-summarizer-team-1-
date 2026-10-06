@@ -26,8 +26,8 @@ services:
     depends_on:
       - db
     volumes:
-      - ./backend:/app  # Hot-reloads code as you type
-
+      - ./backend:/app 
+      - E:/ClipMind_AI_Cache:/root/.cache/huggingface
   # 3. Next.js/Vite Frontend Container
   frontend:
     build: ./frontend
