@@ -50,7 +50,15 @@ STOP_WORDS = {
     "them", "here", "his", "her", "its", "in", "is", "it", "of", "on", "to", "a", "an", "as",
     "at", "by", "or", "be", "do", "um", "uh", "like", "okay", "right", "yeah", "well",
 }
-PROCESSING_STATUSES = ("processing", "validating", "ffmpeg_processing", "ready_for_ai", "ai_processing")
+PROCESSING_STATUSES = (
+    "processing",
+    "validating",
+    "ffmpeg_processing",
+    "extracting_audio",
+    "transcribing",
+    "ready_for_ai",
+    "ai_processing",
+)
 PENDING_STATUSES = ("uploading", "uploaded")
 
 

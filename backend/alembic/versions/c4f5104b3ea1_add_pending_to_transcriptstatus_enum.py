@@ -20,6 +20,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    if op.get_bind().dialect.name != "postgresql":
+        return
     # PostgreSQL requires ALTER TYPE ... ADD VALUE to run outside a transaction.
     with op.get_context().autocommit_block():
         op.execute("ALTER TYPE transcriptstatus ADD VALUE IF NOT EXISTS 'PENDING'")

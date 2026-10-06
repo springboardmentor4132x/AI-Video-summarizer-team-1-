@@ -181,13 +181,12 @@ class TestTranscriptEditAuthorization:
         r = client.patch("/videos/1/transcript", json={"text": "new"})
         assert r.status_code == 403
     
-    def test_content_creator_with_own_video_allowed(self):
+    def test_content_creator_cannot_edit_own_video(self):
         creator = _make_user("creator-edit@test.com", "content_creator")
         video, transcript = _make_video_with_transcript(creator)
         _auth_user(creator)
         r = client.patch(f"/videos/{video.id}/transcript", json={"text": "edited"})
-        assert r.status_code != 403
-        assert r.status_code != 401
+        assert r.status_code == 403
     
     def test_educator_with_own_video_allowed(self):
         educator = _make_user("educator-edit@test.com", "educator")

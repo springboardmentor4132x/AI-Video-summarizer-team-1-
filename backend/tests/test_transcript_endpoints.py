@@ -54,7 +54,10 @@ def setup_db(monkeypatch, tmp_path):
 
 def _create_user(email: str = "user@example.com") -> User:
     db = TestingSessionLocal()
-    user = User(name="Test User", email=email, password="hash", role="content creator")
+    # This shared helper exercises the editable transcript flow; editing is
+    # intentionally limited to educators. Creator read-only behavior is covered
+    # by the RBAC tests.
+    user = User(name="Test User", email=email, password="hash", role="educator")
     db.add(user)
     db.commit()
     db.refresh(user)

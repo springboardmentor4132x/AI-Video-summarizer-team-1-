@@ -14,6 +14,7 @@ from app.models.video import Video
 from app.models.transcript import Transcript
 from app.models.summary import Summary
 from app.models.key_moment import KeyMoment
+from app.models.learning import LearningHistory, LearningBookmark, LearningMaterial, SharedSummary, AuditLog, PlatformSetting, Classroom, ClassroomMember, ClassroomResource
 from app.db.session import Base
 from app.db.session import Base
 

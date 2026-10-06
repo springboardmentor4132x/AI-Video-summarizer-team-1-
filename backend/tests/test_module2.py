@@ -173,7 +173,11 @@ def test_summary_retry_after_failure(monkeypatch):
 
 
 def test_key_moments_use_stored_segments_without_whisper(monkeypatch):
-    segments = [{"start": 0.0, "end": 2.0, "text": "Important architecture decision."}]
+    segments = [{
+        "start": 0.0,
+        "end": 8.0,
+        "text": "Architecture decisions separate upload validation from background processing.",
+    }]
     monkeypatch.setattr(video_router, "transcribe_audio", lambda *_: (_ for _ in ()).throw(AssertionError("Whisper called")))
     moments = detect_key_moments(segments, threshold=0.3)
     assert moments and moments[0].text == segments[0]["text"]

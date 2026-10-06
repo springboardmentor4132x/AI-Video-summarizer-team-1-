@@ -9,6 +9,9 @@ export default defineConfig({
     setupFiles: ["./src/test-setup.ts"],
   },
   server: {
+    host: true,
     port: 5173,
+    strictPort: true,
+    watch: { usePolling: true },
   },
 });

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 import logging
@@ -5,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user, require_role
+from app.dependencies.video_access import learner_has_shared_access
 from app.schemas.user import UserRole
 from app.models.summary import Summary, SummaryStatus
 from app.models.transcript import TranscriptStatus
@@ -17,8 +19,28 @@ router = APIRouter(tags=["summaries"])
 logger = logging.getLogger(__name__)
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _duration_seconds(started_at: datetime | None, completed_at: datetime | None) -> float | None:
+    if started_at is None or completed_at is None:
+        return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    else:
+        started_at = started_at.astimezone(timezone.utc)
+    if completed_at.tzinfo is None:
+        completed_at = completed_at.replace(tzinfo=timezone.utc)
+    else:
+        completed_at = completed_at.astimezone(timezone.utc)
+    return max(0.0, (completed_at - started_at).total_seconds())
+
+
 def _get_owned_video(video_id: int, db: Session, current_user) -> Video:
     video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None and str(getattr(current_user, "role", "")).title() == UserRole.LEARNER.value and learner_has_shared_access(db, video_id, current_user.id):
+        video = db.query(Video).filter(Video.id == video_id, Video.status == "completed").first()
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video
@@ -85,6 +107,11 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
         return summary
 
     summary.status = SummaryStatus.PROCESSING
+    summary.processing_started_at = _utc_now()
+    summary.processing_completed_at = None
+    summary.processing_duration_seconds = None
+    summary.error_code = None
+    summary.error_message = None
     try:
         db.commit()
     except Exception as exc:
@@ -100,6 +127,10 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
         summary.short_summary = result.short_summary
         summary.detailed_summary = result.detailed_summary
         summary.status = SummaryStatus.COMPLETED
+        summary.error_code = None
+        summary.error_message = None
+        summary.processing_completed_at = _utc_now()
+        summary.processing_duration_seconds = _duration_seconds(summary.processing_started_at, summary.processing_completed_at)
         db.commit()
         db.refresh(summary)
         return summary
@@ -109,9 +140,15 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
         if summary_id:
             failed_summary = db.query(Summary).filter(Summary.id == summary_id).first()
             if failed_summary is not None:
-                # Keep the previous completed summary intact when a regeneration fails.
                 had_previous_summary = previous_values and (previous_values[1] or previous_values[2])
                 failed_summary.status = SummaryStatus.COMPLETED if had_previous_summary else SummaryStatus.FAILED
+                failed_summary.error_code = "summary_generation_failed"
+                failed_summary.error_message = "Summary generation failed."
+                failed_summary.processing_completed_at = _utc_now()
+                failed_summary.processing_duration_seconds = _duration_seconds(
+                    failed_summary.processing_started_at,
+                    failed_summary.processing_completed_at,
+                )
                 db.commit()
         raise HTTPException(status_code=500, detail="Summary generation failed") from exc
 

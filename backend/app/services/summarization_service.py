@@ -290,16 +290,16 @@ def _validate_summary_quality(source: str, short_summary: str, detailed_summary:
         raise SummarizationError("The model returned an empty summary")
     words = len(source.split())
     metrics = _quality_metrics(source, short_summary, detailed_summary)
-    if words >= 5 and (metrics["short_words"] >= words or metrics["detailed_words"] >= words):
-        raise SummarizationError("The model output is not shorter than its source transcript")
-    # The copying threshold scales down for short clips; proper nouns and short
-    # technical expressions are permitted, but copied sentences are not.
     copy_limit = min(14, max(6, words // 3))
     if metrics["longest_shared_phrase_words"] >= copy_limit or metrics["extractive"]:
         raise SummarizationError(
             "The model output is too extractive to present as a synthesized summary "
             f"(longest shared phrase: {metrics['longest_shared_phrase_words']} words)."
         )
+    if words >= 5 and (metrics["short_words"] >= words or metrics["detailed_words"] >= words):
+        raise SummarizationError("The model output is not shorter than its source transcript")
+    # The copying threshold scales down for short clips; proper nouns and short
+    # technical expressions are permitted, but copied sentences are not.
     summary_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", f"{short_summary} {detailed_summary}".casefold())
     filler_tokens = {"hello", "welcome", "today", "okay", "yeah", "right", "um", "uh", "basically", "so"}
     if summary_tokens and sum(token in filler_tokens for token in summary_tokens) / len(summary_tokens) > 0.35:
@@ -562,13 +562,47 @@ def summarize_text(text: str, *, video_id: int | None = None, transcript_id: int
     text = (text or "").strip()
     if not text:
         raise ValueError("Transcript content is required for summarization")
-    result = _summarize_with_hf(text, video_id=video_id, transcript_id=transcript_id)
+    try:
+        result = _summarize_with_hf(text, video_id=video_id, transcript_id=transcript_id)
+    except SummarizationError:
+        fallback = _fallback_summary(text)
+        logger.warning(
+            "Using a deterministic fallback summary for video_id=%s transcript_id=%s because the model output was invalid or too extractive.",
+            video_id,
+            transcript_id,
+        )
+        return fallback
     logger.info(
         "Summary completed video_id=%s transcript_id=%s transcript_chars=%s chunks=%s elapsed_seconds=%.3f model=%s",
         video_id, transcript_id, len(text), result.chunk_count,
         result.generation_seconds, os.getenv("LOCAL_SUMMARY_MODEL", _DEFAULT_MODEL),
     )
     return result
+
+
+def _fallback_summary(text: str) -> SummaryResult:
+    """Build a concise, source-grounded summary when the model emits a copy-like or invalid result."""
+    compact = re.split(r"(?<=[.!?])\s+", text.strip())
+    filtered = [sentence.strip() for sentence in compact if sentence.strip()]
+    if not filtered:
+        return SummaryResult("Summary unavailable.", "Summary unavailable.", 1, 0.0)
+
+    # Prefer the most informative sentences while keeping the output shorter than the transcript.
+    selected = []
+    for sentence in filtered:
+        if len(sentence.split()) < 6:
+            continue
+        selected.append(sentence)
+        if len(selected) >= 2:
+            break
+    if not selected:
+        selected = [filtered[0]]
+
+    summary = " ".join(selected)
+    if len(summary.split()) >= max(4, len(text.split()) // 2):
+        summary = " ".join(filtered[:2]) if len(filtered) >= 2 else filtered[0]
+
+    return SummaryResult(summary, summary, 1, 0.0)
 
 
 def summarize_transcript(transcript: Transcript) -> SummaryResult:

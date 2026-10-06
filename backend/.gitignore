@@ -15,5 +15,6 @@ venv/
 *.db
 # Logs
 *.log
+bg_tasks.log
 register_test.py
 scripts/

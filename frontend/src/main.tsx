@@ -20,6 +20,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="/dashboard" element={<DashboardRedirect />} />
               <Route element={<ProtectedRoute allowedRoles={["Content Creator"]} />}>
                 <Route path="/dashboard/content-creator" element={<Dashboard />} />
+                <Route path="/creator/analytics" element={<AnalyticsPage />} />
                 <Route path="/creator/upload" element={<VideoUploadPage />} />
                 <Route path="/creator/videos" element={<VideoLibraryPage heading="Manage videos" description="Review the videos you have uploaded and their current processing state." />} />
                 <Route path="/creator/transcripts" element={<VideoLibraryPage heading="Video transcripts" description="Generate, review, edit, and download transcripts for your videos." />} />

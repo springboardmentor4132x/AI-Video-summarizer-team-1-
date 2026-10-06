@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Enum,
     JSON,
+    Float,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -49,9 +50,15 @@ class Transcript(Base):
         onupdate=func.now(),
     )
 
+    error_code = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    processing_started_at = Column(DateTime(timezone=True), nullable=True)
+    processing_completed_at = Column(DateTime(timezone=True), nullable=True)
+    processing_duration_seconds = Column(Float, nullable=True)
+
     video_id = Column(
         Integer,
-        ForeignKey("videos.id"),
+        ForeignKey("videos.id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
     )

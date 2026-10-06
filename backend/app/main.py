@@ -8,6 +8,7 @@ from app.routers.transcript import router as transcript_router
 from app.routers.summary import router as summary_router
 from app.routers.admin import router as admin_router
 from app.routers.analytics import router as analytics_router
+from app.routers.learning import router as learning_router
 
 app = FastAPI(title="ClipMind AI")
 
@@ -27,6 +28,7 @@ app.include_router(transcript_router)
 app.include_router(summary_router)
 app.include_router(admin_router)
 app.include_router(analytics_router)
+app.include_router(learning_router)
 
 @app.get("/")
 def read_root():

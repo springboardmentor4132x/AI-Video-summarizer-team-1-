@@ -94,7 +94,12 @@ def calculate_similarities(embeddings: np.ndarray) -> list[float]:
     return [cosine_similarity(embeddings[i], embeddings[i + 1]) for i in range(max(0, len(embeddings) - 1))]
 
 def extract_keywords(segments: list[TranscriptSegment | dict[str, Any]], max_keywords: int = 10) -> list[str]:
-    """Use KeyBERT phrase scores; preserve the old IDF signal as outage fallback."""
+    """Mix scored KeyBERT phrases with repeated transcript terms.
+
+    Phrases preserve concepts while the term slots make obvious repeated words
+    (for example, ``machine`` in ``machine learning``) visible to downstream
+    labels and to reviewers inspecting the result.
+    """
     text = " ".join(
         _value(segment, "text", "").strip()
         for segment in segments
@@ -102,7 +107,24 @@ def extract_keywords(segments: list[TranscriptSegment | dict[str, Any]], max_key
     )
     phrases = extract_keyphrases(text, top_n=max_keywords)
     if phrases:
-        return [str(item["phrase"]) for item in phrases]
+        phrase_limit = max(1, max_keywords // 2) if max_keywords > 1 else 1
+        phrase_values = [str(item["phrase"]) for item in phrases[:phrase_limit]]
+        documents = [tokenize(_value(segment, "text", "")) for segment in segments if isinstance(_value(segment, "text", ""), str)]
+        documents = [doc for doc in documents if doc]
+        frequency = Counter(word for doc in documents for word in doc)
+        document_frequency = Counter(word for doc in documents for word in set(doc))
+        total = max(1, len(documents))
+        term_ranked = sorted(
+            frequency,
+            key=lambda word: (
+                -(frequency[word] * (math.log((total + 1) / (document_frequency[word] + 1)) + 1)),
+                -frequency[word],
+                word,
+            ),
+        )
+        remaining = max(0, max_keywords - len(phrase_values))
+        terms = [word for word in term_ranked if word not in {value.casefold() for value in phrase_values}][:remaining]
+        return phrase_values + terms
     documents = [tokenize(_value(s, "text", "")) for s in segments if isinstance(_value(s, "text", ""), str)]
     documents = [doc for doc in documents if doc]
     if not documents: return []
@@ -123,20 +145,33 @@ def _format_label(label: str) -> str:
 def _topic_label(text: str, global_keywords: list[str], used_labels: set[str] | None = None) -> str | None:
     words = tokenize(text)
     if not words: return None
+    local_phrases = Counter(_phrase_candidates(text))
+    repeated_local = [phrase for phrase, count in local_phrases.items() if count >= 2]
+    if repeated_local:
+        global_rank = {word: index for index, word in enumerate(global_keywords)}
+        for phrase in sorted(
+            repeated_local,
+            key=lambda value: (
+                -local_phrases[value],
+                min((global_rank.get(part, len(global_rank)) for part in value.split()), default=len(global_rank)),
+                -len(value.split()),
+                value,
+            ),
+        ):
+            label = _format_label(phrase)
+            if not used_labels or label.casefold() not in {item.casefold() for item in used_labels}:
+                return label
     present_phrases = [phrase for phrase in global_keywords if len(phrase.split()) > 1 and all(part in text.casefold() for part in phrase.casefold().split())]
     if present_phrases:
-        # Prefer conceptual phrases (noun + noun/adjective) over action phrases (verb + object).
-        # Count occurrences and prefer more frequent, multi-word technical terms.
+        # Prefer a phrase that recurs in the region over a longer phrase that
+        # appears only once. Phrase length breaks ties, keeping labels concise
+        # while still choosing a more specific concept when evidence is equal.
         text_lower = text.casefold()
-        phrase_scores = []
-        for phrase in present_phrases:
-            count = text_lower.count(phrase.casefold())
-            # Score based on phrase length (longer = more specific) and frequency
-            word_count = len(phrase.split())
-            score = (word_count * 2) + count  # Prefer longer phrases first, then by frequency
-            phrase_scores.append((phrase, score))
-        # Sort by score descending
-        for phrase, _ in sorted(phrase_scores, key=lambda x: -x[1]):
+        phrase_scores = [
+            (phrase, text_lower.count(phrase.casefold()), len(phrase.split()))
+            for phrase in present_phrases
+        ]
+        for phrase, _, _ in sorted(phrase_scores, key=lambda row: (-row[1], -row[2], row[0].casefold())):
             label = _format_label(phrase)
             if not used_labels or label.casefold() not in {item.casefold() for item in used_labels}:
                 return label
@@ -437,7 +472,8 @@ def detect_key_moments(segments: list[TranscriptSegment | dict[str, Any]], thres
             maximum = max(float(os.getenv("KEY_MOMENT_MIN_SECONDS", "6")), float(os.getenv("KEY_MOMENT_MAX_SECONDS", "35")))
             if duration > maximum:
                 continue
-            regional.append(KeyMoment(span[0].start_time, span[-1].end_time, _build_title(text, keywords), region.label or "General Discussion", _importance(text, region, keywords), text))
+            candidate_topic = _topic_label(text, keywords)
+            regional.append(KeyMoment(span[0].start_time, span[-1].end_time, _build_title(text, keywords), candidate_topic or region.label or "General Discussion", _importance(text, region, keywords), text))
         regional = [item for item in regional if item.importance_score >= threshold]
         if regional:
             # For small, continuous regions, limit to 1-2 candidates.
@@ -451,8 +487,42 @@ def detect_key_moments(segments: list[TranscriptSegment | dict[str, Any]], thres
 
 def segment_topics(segments: list[TranscriptSegment | dict[str, Any]]) -> list[dict[str, Any]]:
     chunks = segment_transcript(segments)
-    keywords = extract_keywords([{"text": c.text} for c in chunks])
-    return [{"start": c.start_time, "end": c.end_time, "topic": _topic_label(c.text, keywords), "text": c.text, "keywords": [k for k in keywords if k in tokenize(c.text)]} for c in chunks]
+    if not chunks:
+        return []
+    all_text = " ".join(chunk.text for chunk in chunks)
+    global_keywords = extract_keyphrases(all_text, top_n=12)
+    labels = [str(row["phrase"]) for row in global_keywords]
+    try:
+        embeddings = generate_embeddings([chunk.text for chunk in chunks])
+        min_region_chunks = 1 if len(chunks) <= 2 else max(2, math.ceil(math.sqrt(len(chunks)) / 2))
+        regions = detect_topics_semantic(
+            chunks,
+            embeddings,
+            calculate_similarities(embeddings),
+            min_region_chunks=min_region_chunks,
+        )
+    except Exception:
+        # If the embedding model is unavailable, keep one honest transcript-backed
+        # region instead of inventing boundaries from unstable lexical noise.
+        label = _topic_label(all_text, labels) or "General Discussion"
+        regions = [TopicRegion(label, chunks[0].start_time, chunks[-1].end_time, chunks)]
+
+    topics: list[dict[str, Any]] = []
+    used_labels: set[str] = set()
+    for region in regions:
+        text = " ".join(chunk.text for chunk in region.chunks).strip()
+        phrase_rows = extract_keyphrases(text, top_n=6)
+        topic_label = region.label or _topic_label(text, labels, used_labels) or "General Discussion"
+        used_labels.add(topic_label)
+        topics.append({
+            "start": region.start_time,
+            "end": region.end_time,
+            "topic": topic_label,
+            "text": text,
+            "segment_count": len(region.chunks),
+            "keywords": phrase_rows,
+        })
+    return topics
 
 def save_key_moments(db: Session, video_id: int, moments: list[KeyMoment]) -> list[KeyMomentModel]:
     db.query(KeyMomentModel).filter(KeyMomentModel.video_id == video_id).delete(synchronize_session=False)

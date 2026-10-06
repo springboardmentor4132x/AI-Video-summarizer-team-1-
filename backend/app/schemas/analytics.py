@@ -214,6 +214,23 @@ class KeywordIntelligence(BaseModel):
     video_count: int
 
 
+class CreatorEngagementVideo(BaseModel):
+    video_id: int
+    filename: str
+    learner_records: int
+    unique_learners: int
+    watch_time_seconds: int
+    average_completion_percentage: float | None
+
+
+class CreatorEngagement(BaseModel):
+    learner_records: int
+    unique_learners: int
+    watch_time_seconds: int
+    average_completion_percentage: float | None
+    by_video: list[CreatorEngagementVideo]
+
+
 class AnalyticsDashboard(BaseModel):
     overview: OverviewAnalytics
     video_analytics: VideoAnalytics
@@ -236,3 +253,4 @@ class AnalyticsDashboard(BaseModel):
     content_activity: list[ContentActivityItem]
     compression_insights: CompressionInsights
     importance_distribution: list[ImportanceDistributionItem]
+    learner_engagement: CreatorEngagement | None = None

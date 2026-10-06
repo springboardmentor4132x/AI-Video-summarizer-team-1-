@@ -1,8 +1,9 @@
 ﻿import logging
+from datetime import datetime, timezone
 from uuid import uuid4
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -11,12 +12,34 @@ from app.dependencies.auth import get_current_user, require_role
 from app.schemas.user import UserRole
 from app.models.transcript import Transcript, TranscriptStatus
 from app.models.video import Video
+from app.models.learning import AuditLog, ClassroomMember, ClassroomResource
+from app.dependencies.video_access import learner_has_shared_access
 from app.schemas.transcript import TranscriptResponse, TranscriptUpdate
+from app.schemas.admin import TranscriptSearchMatch, TranscriptSearchResponse
 from app.services.ffmpeg_service import extract_audio
 from app.services.transcription_service import transcribe_audio
 
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _duration_seconds(started_at: datetime | None, completed_at: datetime | None) -> float | None:
+    if started_at is None or completed_at is None:
+        return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    else:
+        started_at = started_at.astimezone(timezone.utc)
+    if completed_at.tzinfo is None:
+        completed_at = completed_at.replace(tzinfo=timezone.utc)
+    else:
+        completed_at = completed_at.astimezone(timezone.utc)
+    return max(0.0, (completed_at - started_at).total_seconds())
+
 
 # Directory used to stage temporary audio files during on-demand transcription.
 # Mirrors the same constant used in the video router.
@@ -28,7 +51,13 @@ router = APIRouter(tags=["transcripts"])
 
 def _get_owned_video(video_id: int, db: Session, current_user) -> Video:
     """Return the video only when it is owned by current_user; 404 otherwise."""
-    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    role = str(getattr(current_user, "role", "")).title()
+    query = db.query(Video).filter(Video.id == video_id)
+    if role != UserRole.ADMINISTRATOR.value:
+        query = query.filter(Video.user_id == current_user.id)
+    video = query.first()
+    if video is None and str(getattr(current_user, "role", "")).title() == UserRole.LEARNER.value and learner_has_shared_access(db, video_id, current_user.id):
+        video = db.query(Video).filter(Video.id == video_id, Video.status == "completed").first()
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video
@@ -40,6 +69,82 @@ def _get_owned_transcript(video_id: int, db: Session, current_user) -> Transcrip
     if video.transcript is None:
         raise HTTPException(status_code=404, detail="Transcript not found")
     return video.transcript
+
+
+# ---------------------------------------------------------------------------
+# GET /transcripts/search — search the authenticated user's transcript data
+# ---------------------------------------------------------------------------
+
+@router.get("/transcripts/search", response_model=TranscriptSearchResponse)
+def search_transcripts(
+    q: str = Query(..., min_length=2, max_length=200),
+    video_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Search completed transcript text and timestamped segments owned by the user."""
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=422, detail="Search query is required")
+
+    rows = (
+        db.query(Transcript)
+        .join(Video, Transcript.video_id == Video.id)
+        .filter(Transcript.status == TranscriptStatus.COMPLETED)
+    )
+    if str(getattr(current_user, "role", "")).title() != UserRole.LEARNER.value:
+        rows = rows.filter(Video.user_id == current_user.id)
+    else:
+        from app.models.learning import SharedSummary
+        shared_ids = db.query(SharedSummary.video_id).filter(SharedSummary.audience == "students").distinct()
+        class_ids = db.query(ClassroomResource.resource_id).join(ClassroomMember, ClassroomMember.classroom_id == ClassroomResource.classroom_id).filter(ClassroomResource.resource_type == "video", ClassroomMember.learner_id == current_user.id)
+        rows = rows.filter((Video.id.in_(shared_ids)) | (Video.id.in_(class_ids)))
+    if video_id is not None:
+        rows = rows.filter(Video.id == video_id)
+
+    needle = query.casefold()
+    results: list[TranscriptSearchMatch] = []
+    for transcript in rows.order_by(Video.uploaded_at.desc()).all():
+        segments = transcript.segments or []
+        matched_segments = [
+            segment
+            for segment in segments
+            if isinstance(segment, dict)
+            and needle in str(segment.get("text", "")).casefold()
+        ]
+        if needle not in (transcript.text or "").casefold() and not matched_segments:
+            continue
+
+        if matched_segments:
+            for segment in matched_segments:
+                results.append(
+                    TranscriptSearchMatch(
+                        video_id=transcript.video_id,
+                        filename=transcript.video.filename,
+                        transcript_id=transcript.id,
+                        status=transcript.status.value,
+                        text=str(segment.get("text", "")),
+                        start_time=segment.get("start"),
+                        end_time=segment.get("end"),
+                    )
+                )
+                if len(results) >= limit:
+                    return TranscriptSearchResponse(query=query, results=results)
+        else:
+            results.append(
+                TranscriptSearchMatch(
+                    video_id=transcript.video_id,
+                    filename=transcript.video.filename,
+                    transcript_id=transcript.id,
+                    status=transcript.status.value,
+                    text=transcript.text or "",
+                )
+            )
+            if len(results) >= limit:
+                break
+
+    return TranscriptSearchResponse(query=query, results=results)
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +213,15 @@ def generate_video_transcript(
         )
 
     transcript.status = TranscriptStatus.PROCESSING
+    transcript.processing_started_at = _utc_now()
+    transcript.processing_completed_at = None
+    transcript.processing_duration_seconds = None
+    transcript.error_code = None
+    transcript.error_message = None
+    video.processing_stage = "transcribing"
+    video.processing_started_at = transcript.processing_started_at
+    video.processing_error_code = None
+    video.processing_error_message = None
     db.commit()
 
     audio_path = UPLOAD_DIR / f"{uuid4()}_transcription.wav"
@@ -119,6 +233,15 @@ def generate_video_transcript(
         )
         if extraction.status != "completed" or not extraction.audio_path:
             transcript.status = TranscriptStatus.FAILED
+            transcript.error_code = extraction.error_code or "audio_extraction_failed"
+            transcript.error_message = extraction.error_message or "Audio could not be extracted from the video."
+            transcript.processing_completed_at = _utc_now()
+            transcript.processing_duration_seconds = _duration_seconds(transcript.processing_started_at, transcript.processing_completed_at)
+            video.processing_stage = "failed"
+            video.processing_error_code = transcript.error_code
+            video.processing_error_message = transcript.error_message
+            video.processing_completed_at = transcript.processing_completed_at
+            video.status = "failed"
             db.commit()
             raise HTTPException(
                 status_code=500,
@@ -128,6 +251,15 @@ def generate_video_transcript(
         result = transcribe_audio(extraction.audio_path)
         if result.status != "completed":
             transcript.status = TranscriptStatus.FAILED
+            transcript.error_code = result.error_code or "transcription_failed"
+            transcript.error_message = result.error_message or "Whisper transcription failed."
+            transcript.processing_completed_at = _utc_now()
+            transcript.processing_duration_seconds = _duration_seconds(transcript.processing_started_at, transcript.processing_completed_at)
+            video.processing_stage = "failed"
+            video.processing_error_code = transcript.error_code
+            video.processing_error_message = transcript.error_message
+            video.processing_completed_at = transcript.processing_completed_at
+            video.status = "failed"
             db.commit()
             raise HTTPException(
                 status_code=500,
@@ -138,6 +270,15 @@ def generate_video_transcript(
         transcript.language = result.language
         transcript.segments = result.segments
         transcript.status = TranscriptStatus.COMPLETED
+        transcript.error_code = None
+        transcript.error_message = None
+        transcript.processing_completed_at = _utc_now()
+        transcript.processing_duration_seconds = _duration_seconds(transcript.processing_started_at, transcript.processing_completed_at)
+        video.processing_stage = "completed"
+        video.processing_completed_at = transcript.processing_completed_at
+        video.processing_error_code = None
+        video.processing_error_message = None
+        video.status = "completed"
         db.commit()
         db.refresh(transcript)
         return transcript
@@ -151,6 +292,21 @@ def generate_video_transcript(
             transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
             if transcript is not None:
                 transcript.status = TranscriptStatus.FAILED
+                transcript.error_code = transcript.error_code or "transcription_failed"
+                transcript.error_message = transcript.error_message or "Transcript generation failed."
+                transcript.processing_completed_at = _utc_now()
+                if transcript.processing_started_at is not None:
+                    transcript.processing_duration_seconds = _duration_seconds(
+                        transcript.processing_started_at,
+                        transcript.processing_completed_at,
+                    )
+                video = db.query(Video).filter(Video.id == video_id).first()
+                if video:
+                    video.status = "failed"
+                    video.processing_stage = "failed"
+                    video.processing_error_code = transcript.error_code
+                    video.processing_error_message = transcript.error_message
+                    video.processing_completed_at = transcript.processing_completed_at
                 db.commit()
         except Exception:
             db.rollback()
@@ -171,7 +327,7 @@ def update_video_transcript(
     video_id: int,
     payload: TranscriptUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR])),
+    current_user=Depends(require_role(UserRole.EDUCATOR)),
 ):
     """Update editable fields on an existing COMPLETED transcript.
 
@@ -193,6 +349,8 @@ def update_video_transcript(
         transcript.language = payload.language
     if payload.segments is not None:
         transcript.segments = payload.segments
+
+    db.add(AuditLog(actor_id=current_user.id, action="educator.transcript.edit", resource=f"video:{video_id}"))
 
     db.commit()
     db.refresh(transcript)

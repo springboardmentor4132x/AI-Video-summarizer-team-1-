@@ -195,6 +195,17 @@ export interface KeyMoment {
   created_at: string;
 }
 
+export interface VideoTopic {
+  start: number;
+  end: number;
+  topic: string;
+  text: string;
+  segment_count: number;
+  keywords: { phrase: string; score: number }[];
+  key_moment_count: number;
+  average_importance: number | null;
+}
+
 export interface McqQuestion {
   question: string;
   options: string[];
@@ -285,6 +296,13 @@ export interface AnalyticsInsight {
 }
 
 export interface AnalyticsDashboard {
+  learner_engagement?: {
+    learner_records: number;
+    unique_learners: number;
+    watch_time_seconds: number;
+    average_completion_percentage: number | null;
+    by_video: { video_id: number; filename: string; learner_records: number; unique_learners: number; watch_time_seconds: number; average_completion_percentage: number | null }[];
+  } | null;
   overview: {
     total_videos: number;
     completed_videos: number;
@@ -643,12 +661,12 @@ export function generateTranscript(token: string, videoId: string | number) {
   }).then(normalizeTranscript);
 }
 
-export function updateTranscript(token: string, videoId: string | number, text: string) {
+export function updateTranscript(token: string, videoId: string | number, text: string, segments?: TranscriptSegment[]) {
   ensureValidAuthorization(token);
   return request<BackendTranscript>(`/videos/${videoId}/transcript`, {
     method: "PATCH",
     headers: getAuthHeaders(token),
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, ...(segments ? { segments } : {}) }),
   }).then(normalizeTranscript);
 }
 
@@ -679,6 +697,13 @@ export function retrySummary(token: string, videoId: string | number) {
 export function getKeyMoments(token: string, videoId: string | number) {
   ensureValidAuthorization(token);
   return request<{ video_id: number; status: string; key_moments: KeyMoment[] }>(`/videos/${videoId}/key-moments`, {
+    headers: getAuthHeaders(token),
+  });
+}
+
+export function getVideoTopics(token: string, videoId: string | number) {
+  ensureValidAuthorization(token);
+  return request<{ video_id: number; topics: VideoTopic[] }>(`/videos/${videoId}/topics`, {
     headers: getAuthHeaders(token),
   });
 }
@@ -733,3 +758,106 @@ export async function downloadSummary(token: string, videoId: string | number) {
     type: response.headers.get("Content-Type") || "text/plain;charset=utf-8",
   });
 }
+
+export interface LearnerHistoryItem {
+  id: number;
+  video_id: number;
+  last_position_seconds: number;
+  viewed_at: string;
+  video?: { id?: number | string; filename: string };
+}
+
+export interface LearnerBookmark {
+  id: number;
+  video_id: number;
+  key_moment_id: number | null;
+  kind: "summary" | "highlight";
+  note: string | null;
+  created_at: string;
+  video?: { id?: number | string; filename: string };
+}
+
+export function getLearningHistory(token: string) {
+  return request<LearnerHistoryItem[]>("/learning/history", { headers: getAuthHeaders(token) });
+}
+
+export function saveLearningPosition(token: string, videoId: number | string, position_seconds: number, watched_seconds = 0) {
+  return request<LearnerHistoryItem>(`/learning/history/${videoId}`, {
+    method: "POST", headers: getAuthHeaders(token), body: JSON.stringify({ position_seconds, watched_seconds }),
+  });
+}
+
+export function getLearningBookmarks(token: string) {
+  return request<LearnerBookmark[]>("/learning/bookmarks", { headers: getAuthHeaders(token) });
+}
+
+export function addLearningBookmark(token: string, payload: { video_id: number; key_moment_id?: number | null; kind: "summary" | "highlight"; note?: string }) {
+  return request<LearnerBookmark>("/learning/bookmarks", {
+    method: "POST", headers: getAuthHeaders(token), body: JSON.stringify(payload),
+  });
+}
+
+export function deleteLearningBookmark(token: string, bookmarkId: number) {
+  return request<void>(`/learning/bookmarks/${bookmarkId}`, { method: "DELETE", headers: getAuthHeaders(token) });
+}
+
+export function getEducatorMaterials(token: string) {
+  return request<{ id: number; video_id: number; title: string; content: string; created_at: string }[]>("/educator/materials", { headers: getAuthHeaders(token) });
+}
+
+export function getLearnerMaterials(token: string) {
+  return request<{ id: number; video_id: number; title: string; content: string; created_at: string }[]>("/learning/materials", { headers: getAuthHeaders(token) });
+}
+
+export function createEducatorMaterial(token: string, payload: { video_id: number; title: string; content: string }) {
+  return request<{ id: number; video_id: number; title: string; content: string; created_at: string }>("/educator/materials", {
+    method: "POST", headers: getAuthHeaders(token), body: JSON.stringify(payload),
+  });
+}
+
+export function updateEducatorMaterial(token: string, materialId: number, payload: { video_id: number; title: string; content: string }) {
+  return request<{ id: number; video_id: number; title: string; content: string; created_at: string }>(`/educator/materials/${materialId}`, {
+    method: "PUT", headers: getAuthHeaders(token), body: JSON.stringify(payload),
+  });
+}
+
+export function deleteEducatorMaterial(token: string, materialId: number) {
+  return request<void>(`/educator/materials/${materialId}`, { method: "DELETE", headers: getAuthHeaders(token) });
+}
+
+export function shareEducatorSummary(token: string, video_id: number, audience = "students") {
+  return request<{ id: number; video_id: number; audience: string; created_at: string }>("/educator/shares", {
+    method: "POST", headers: getAuthHeaders(token), body: JSON.stringify({ video_id, audience }),
+  });
+}
+
+export interface EducatorAnalytics {
+  total_lectures: number; published_lectures: number; total_views: number; unique_learners: number;
+  active_learners_30d: number; watch_time_seconds: number; average_completion_percentage: number | null;
+  per_video: { video_id: number; filename: string; published: boolean; views: number; unique_learners: number; watch_time_seconds: number; average_completion_percentage: number | null }[];
+}
+
+export function getEducatorAnalytics(token: string) {
+  return request<EducatorAnalytics>("/educator/analytics", { headers: getAuthHeaders(token) });
+}
+
+export interface ClassroomItem { id: number; name: string; description: string | null; educator_id: number; invite_code: string; created_at: string }
+export interface ClassroomResourceItem { id: number; resource_type: "video" | "material"; resource_id: number; resource: Record<string, unknown> }
+export interface ClassroomAnalytics {
+  classroom_id: number; learners: number; views: number; unique_viewers: number;
+  watch_time_seconds: number; average_completion_percentage: number | null;
+  per_video: { video_id: number; filename: string; views: number; watch_time_seconds: number; average_completion_percentage: number | null }[];
+}
+export function getEducatorClassrooms(token: string) { return request<ClassroomItem[]>("/educator/classrooms", { headers: getAuthHeaders(token) }); }
+export function createClassroom(token: string, payload: { name: string; description: string }) { return request<ClassroomItem>("/educator/classrooms", { method: "POST", headers: getAuthHeaders(token), body: JSON.stringify(payload) }); }
+export function deleteClassroom(token: string, classroomId: number) { return request<void>(`/educator/classrooms/${classroomId}`, { method: "DELETE", headers: getAuthHeaders(token) }); }
+export function shareClassroomResource(token: string, classroomId: number, payload: { resource_type: "video" | "material"; resource_id: number }) { return request<ClassroomResourceItem>(`/educator/classrooms/${classroomId}/resources`, { method: "POST", headers: getAuthHeaders(token), body: JSON.stringify(payload) }); }
+export function getClassroomMembers(token: string, classroomId: number) { return request<{ learner_id: number; id: number; name: string; email: string; joined_at: string }[]>(`/educator/classrooms/${classroomId}/members`, { headers: getAuthHeaders(token) }); }
+export function getClassroomAnalytics(token: string, classroomId: number) { return request<ClassroomAnalytics>(`/educator/classrooms/${classroomId}/analytics`, { headers: getAuthHeaders(token) }); }
+export function updateClassroom(token: string, classroomId: number, payload: { name: string; description: string }) { return request<ClassroomItem>(`/educator/classrooms/${classroomId}`, { method: "PUT", headers: getAuthHeaders(token), body: JSON.stringify(payload) }); }
+export function removeClassroomMember(token: string, classroomId: number, learnerId: number) { return request<void>(`/educator/classrooms/${classroomId}/members/${learnerId}`, { method: "DELETE", headers: getAuthHeaders(token) }); }
+export function getEducatorClassroomResources(token: string, classroomId: number) { return request<ClassroomResourceItem[]>(`/educator/classrooms/${classroomId}/resources`, { headers: getAuthHeaders(token) }); }
+export function removeClassroomResource(token: string, classroomId: number, resourceId: number, type: "video" | "material") { return request<void>(`/educator/classrooms/${classroomId}/resources/${resourceId}?resource_type=${type}`, { method: "DELETE", headers: getAuthHeaders(token) }); }
+export function getLearnerClassrooms(token: string) { return request<ClassroomItem[]>("/learner/classrooms", { headers: getAuthHeaders(token) }); }
+export function joinClassroom(token: string, invite_code: string) { return request<{ classroom: ClassroomItem }>("/learner/classrooms/join", { method: "POST", headers: getAuthHeaders(token), body: JSON.stringify({ invite_code }) }); }
+export function getClassroomResources(token: string, classroomId: number) { return request<ClassroomResourceItem[]>(`/learner/classrooms/${classroomId}/resources`, { headers: getAuthHeaders(token) }); }

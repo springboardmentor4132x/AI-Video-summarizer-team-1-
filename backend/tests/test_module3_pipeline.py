@@ -68,6 +68,29 @@ def test_topic_label_ignores_generic_narration_and_uses_local_content():
     assert regions[0].end_time == 20
 
 
+def test_segment_topics_returns_topic_regions_with_keyword_evidence(monkeypatch):
+    import app.services.key_moment_service as service
+
+    segments = [
+        {"start": 0, "end": 5, "text": "Machine learning models identify useful data patterns."},
+        {"start": 5, "end": 10, "text": "Machine learning training adjusts model parameters."},
+        {"start": 10, "end": 15, "text": "Machine learning validation checks prediction quality."},
+        {"start": 15, "end": 20, "text": "Cooking recipes combine fresh herbs and vegetables."},
+        {"start": 20, "end": 25, "text": "Cooking techniques improve flavor and texture."},
+        {"start": 25, "end": 30, "text": "Cooking ingredients need careful preparation."},
+    ]
+    monkeypatch.setattr(service, "generate_embeddings", lambda texts: np.ones((len(texts), 2)))
+    monkeypatch.setattr(service, "calculate_similarities", lambda _: [.9, .9, .1, .1, .9])
+
+    topics = service.segment_topics(segments)
+
+    assert len(topics) == 2
+    assert [topic["start"] for topic in topics] == [0, 15]
+    assert [topic["end"] for topic in topics] == [15, 30]
+    assert all(topic["segment_count"] == 3 for topic in topics)
+    assert all(topic["keywords"] and "score" in topic["keywords"][0] for topic in topics)
+
+
 def test_remove_overlaps_keeps_stronger_candidate_and_non_overlapping_candidates():
     candidates = [
         KeyMoment(10, 30, "A", "Topic", 0.82, "A"),
