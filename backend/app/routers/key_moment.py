@@ -5,10 +5,13 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.video import get_owned_video
+from app.dependencies.auth import get_current_user, require_role
+from app.schemas.user import UserRole
+from app.models.transcript import TranscriptStatus
 from app.models.video import Video
 from app.models.key_moment import KeyMoment
 from app.schemas.key_moment import KeyMomentsResponse
+from app.services.key_moment_service import detect_key_moments, save_key_moments
 
 
 router = APIRouter(
@@ -17,21 +20,48 @@ router = APIRouter(
 )
 
 
+def get_owned_video(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> Video:
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return video
+
+
 @router.get(
     "/{video_id}/key-moments",
     response_model=KeyMomentsResponse,
 )
 def get_key_moments(
-    video: Video = Depends(get_owned_video),
+    video_id: int,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """
     Return detected key moments for a video owned by the current user.
     """
 
+    video = (
+        db.query(Video)
+        .filter(
+            Video.id == video_id,
+            Video.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if video is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Video not found",
+        )
+
     moments = (
         db.query(KeyMoment)
-        .filter(KeyMoment.video_id == video.id)
+        .filter(KeyMoment.video_id == video_id)
         .order_by(KeyMoment.start_time)
         .all()
     )
@@ -66,13 +96,40 @@ def get_key_moments(
     }
 
 
+@router.post(
+    "/{video_id}/key-moments/generate",
+    response_model=KeyMomentsResponse,
+)
+def generate_key_moments(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role([UserRole.CONTENT_CREATOR, UserRole.EDUCATOR])),
+):
+    """Regenerate key moments from the already stored transcript."""
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    transcript = video.transcript
+    if transcript is None or transcript.status != TranscriptStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail="Transcript must be completed before key-moment detection")
+    moments = detect_key_moments(transcript.segments or [])
+    saved = save_key_moments(db, video.id, moments)
+    db.commit()
+    return {
+        "video_id": video.id,
+        "status": video.status,
+        "key_moments": saved,
+    }
+
+
 @router.get(
     "/{video_id}/highlights/{moment_id}",
 )
 def get_highlight(
+    video_id: int,
     moment_id: int,
-    video: Video = Depends(get_owned_video),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """
     Serve the generated highlight video for a key moment.
@@ -80,11 +137,26 @@ def get_highlight(
     The video and key moment must belong to the authenticated user.
     """
 
+    video = (
+        db.query(Video)
+        .filter(
+            Video.id == video_id,
+            Video.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if video is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Video not found",
+        )
+
     moment = (
         db.query(KeyMoment)
         .filter(
             KeyMoment.id == moment_id,
-            KeyMoment.video_id == video.id,
+            KeyMoment.video_id == video_id,
         )
         .first()
     )
@@ -113,4 +185,4 @@ def get_highlight(
         path=highlight_path,
         media_type="video/mp4",
         filename=highlight_path.name,
-    )
+    )

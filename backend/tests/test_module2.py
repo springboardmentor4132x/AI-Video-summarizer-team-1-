@@ -44,7 +44,7 @@ def setup_db(monkeypatch, tmp_path):
 
 def create_video(email="module2@example.com", status="uploaded"):
     db = TestingSessionLocal()
-    user = User(name="Module 2 User", email=email, password="hash", role="learner")
+    user = User(name="Module 2 User", email=email, password="hash", role="Content Creator")
     db.add(user)
     db.flush()
     video = Video(user_id=user.id, filename="video.mp4", file_path="input.mp4", status=status)
@@ -54,7 +54,7 @@ def create_video(email="module2@example.com", status="uploaded"):
     user_id = user.id
     video_id = video.id
     db.close()
-    return SimpleNamespace(id=user_id), SimpleNamespace(id=video_id)
+    return SimpleNamespace(id=user_id, role="Content Creator"), SimpleNamespace(id=video_id)
 
 
 def use_user(user):

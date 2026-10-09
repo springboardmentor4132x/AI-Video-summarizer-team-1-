@@ -1,51 +1,147 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { BookOpen, Gauge, LayoutDashboard, Library, LogOut, MonitorCog, ShieldCheck, Upload, UserRound, Users, Video } from "lucide-react";
+import { 
+  BarChart3, BookOpen, Film, LayoutDashboard, LogOut, 
+  MonitorCog, ShieldCheck, Upload, UserRound, Users, 
+  FolderKanban, FileText, History, Sparkles, Menu, X 
+} from "lucide-react";
 import { useAuth } from "../features/auth/AuthContext";
 import type { Role } from "../types/auth";
 
-const roleNavigation: Record<Role, { label: string; path: string; icon: typeof Video }[]> = {
+const roleNavigation: Record<Role, { label: string; path: string; icon: typeof Film }[]> = {
   "Content Creator": [
     { label: "Upload Video", path: "/creator/upload", icon: Upload },
-    { label: "Manage Videos", path: "/creator/videos", icon: Video },
-    { label: "Transcripts", path: "/creator/transcripts", icon: Library },
-    { label: "Upload History", path: "/creator/history", icon: Library },
-    { label: "Processing Status", path: "/creator/processing", icon: Gauge },
+    { label: "Manage Videos", path: "/creator/videos", icon: Film },
+    { label: "Processing Status", path: "/creator/processing", icon: MonitorCog },
+    { label: "Transcripts", path: "/creator/transcripts", icon: FileText },
+    { label: "MCQ Quiz", path: "/creator/mcqs", icon: BookOpen },
+    { label: "Upload History", path: "/creator/history", icon: History },
+    { label: "Analytics", path: "/analytics", icon: BarChart3 },
   ],
   Learner: [
-    { label: "Available Videos", path: "/learner/videos", icon: Video },
+    { label: "Videos", path: "/learner/videos", icon: Film },
+    { label: "Transcripts", path: "/learner/transcripts", icon: FileText },
+    { label: "Summaries", path: "/learner/summaries", icon: Sparkles },
     { label: "Learning Content", path: "/learner/content", icon: BookOpen },
-    { label: "Summaries", path: "/learner/summaries", icon: Library },
-    { label: "Transcripts", path: "/learner/transcripts", icon: Library },
   ],
   Educator: [
-    { label: "Upload Lecture", path: "/educator/upload", icon: Upload },
-    { label: "Educational Content", path: "/educator/content", icon: Library },
-    { label: "Transcripts", path: "/educator/transcripts", icon: Library },
-    { label: "Classroom Content", path: "/educator/classroom", icon: BookOpen },
+    { label: "Lecture Videos", path: "/educator/content", icon: Film },
+    { label: "Transcripts", path: "/educator/transcripts", icon: FileText },
+    { label: "Summaries", path: "/educator/content", icon: Sparkles },
+    { label: "Learning Materials", path: "/educator/classroom", icon: BookOpen },
   ],
   Administrator: [
+    { label: "Analytics", path: "/analytics", icon: BarChart3 },
     { label: "Users", path: "/admin/users", icon: Users },
     { label: "Roles", path: "/admin/roles", icon: ShieldCheck },
-    { label: "Platform Activity", path: "/admin/activity", icon: MonitorCog },
-    { label: "System Monitoring", path: "/admin/monitoring", icon: Gauge },
+    { label: "Content", path: "/admin/activity", icon: FolderKanban },
+    { label: "AI Processing", path: "/admin/monitoring", icon: MonitorCog },
   ],
 };
 
 export function AppShell() {
   const { user, logout } = useAuth();
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   if (!user) return null;
+
+  const displayName = user.full_name || (user as any).name || "ClipMind User";
+  
+  const initials = displayName
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part: string) => part[0]?.toUpperCase() ?? "")
+    .join("") || "C";
+
+  const dashboardPath = `/dashboard/${user.role.toLowerCase().replace(" ", "-")}`;
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">C</span><span>ClipMind <em>AI</em></span></div>
-        <div className="identity"><span className="eyebrow">SIGNED IN AS</span><strong>{user.full_name}</strong><span>{user.role}</span></div>
-        <nav className="nav-list">
-          <NavLink to={`/dashboard/${user.role.toLowerCase().replace(" ", "-")}`}><LayoutDashboard size={17} /> Dashboard</NavLink>
-          {roleNavigation[user.role].map(({ label, path, icon: Icon }) => <NavLink key={path} to={path}><Icon size={17} /> {label}</NavLink>)}
-          <NavLink to="/profile"><UserRound size={17} /> Profile</NavLink>
-        </nav>
-        <button className="logout" onClick={logout}><LogOut size={17} /> Sign out</button>
+<aside className={`sidebar ${isMobileMenuOpen ? "open" : ""}`}>
+        
+        <div className="sidebar-header">
+          {/* Logo with Refresh Action */}
+          <div 
+            className="brand-wrap" 
+            onClick={() => window.location.reload()} 
+            role="button" 
+            tabIndex={0}
+            title="Refresh App"
+          >
+            <div className="brand">
+              <span className="brand-mark"><Film size={18} /></span>
+              <span className="brand-copy">ClipMind <em>AI</em></span>
+            </div>
+          </div>
+
+          {/* Mobile Hamburger Toggle */}
+          <button 
+            className="mobile-toggle" 
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            aria-label="Toggle mobile menu"
+          >
+            {isMobileMenuOpen ? <X size={26} /> : <Menu size={26} />}
+          </button>
+        </div>
+
+        {/* Collapsible Content */}
+        <div className="sidebar-content">
+          <div className="identity">
+            <div className="identity-header">
+              <div className="user-avatar" aria-label={`${displayName} avatar`}>{initials}</div>
+              <div className="identity-copy">
+                <strong>{displayName}</strong>
+                <span className="role-badge">{user.role}</span>
+              </div>
+            </div>
+          </div>
+
+          <nav className="nav-list" aria-label="Sidebar navigation">
+            <div className="nav-section-label">Main</div>
+            <NavLink 
+              to={dashboardPath} 
+              onClick={() => setIsMobileMenuOpen(false)}
+              className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
+            >
+              <LayoutDashboard size={17} />
+              <span>Dashboard</span>
+            </NavLink>
+            
+            {roleNavigation[user.role].map(({ label, path, icon: Icon }) => (
+              <NavLink 
+                key={path} 
+                to={path} 
+                onClick={() => setIsMobileMenuOpen(false)}
+                className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
+              >
+                <Icon size={17} />
+                <span>{label}</span>
+              </NavLink>
+            ))}
+          </nav>
+
+          <div className="sidebar-footer">
+            <div className="nav-section-label">Account</div>
+            <NavLink 
+              to="/profile" 
+              onClick={() => setIsMobileMenuOpen(false)}
+              className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
+            >
+              <UserRound size={17} />
+              <span>Profile</span>
+            </NavLink>
+            <button 
+              className="logout" 
+              type="button" 
+              onClick={() => { setIsMobileMenuOpen(false); logout(); }}
+            >
+              <LogOut size={17} />
+              <span>Sign out</span>
+            </button>
+          </div>
+        </div>
+
       </aside>
       <main className="main-content"><Outlet /></main>
     </div>

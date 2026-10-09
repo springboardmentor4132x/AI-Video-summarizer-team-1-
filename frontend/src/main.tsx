@@ -4,8 +4,9 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./features/auth/AuthContext";
-import { Dashboard, DashboardRedirect, Login, ProcessingStatusPage, Profile, Register, RoleFeaturePage, UploadHistoryPage, VideoLibraryPage, VideoUploadPage } from "./pages";
+import { AnalyticsPage, Dashboard, DashboardRedirect, Login, MCQQuizPage, ProcessingStatusPage, Profile, Register, RoleFeaturePage, UploadHistoryPage, VideoKeyMomentsPage, VideoLibraryPage, VideoResultsPage, VideoSummaryPage, VideoUploadPage } from "./pages";
 import "./styles/global.css";
+import "./styles/modals.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -22,8 +23,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/creator/upload" element={<VideoUploadPage />} />
                 <Route path="/creator/videos" element={<VideoLibraryPage heading="Manage videos" description="Review the videos you have uploaded and their current processing state." />} />
                 <Route path="/creator/transcripts" element={<VideoLibraryPage heading="Video transcripts" description="Generate, review, edit, and download transcripts for your videos." />} />
+                <Route path="/creator/mcqs" element={<MCQQuizPage />} />
+                <Route path="/creator/transcripts/:videoId" element={<VideoResultsPage />} />
+                <Route path="/creator/summaries/:videoId" element={<VideoSummaryPage />} />
+                <Route path="/creator/key-moments/:videoId" element={<VideoKeyMomentsPage />} />
                 <Route path="/creator/history" element={<UploadHistoryPage />} />
-                <Route path="/creator/processing" element={<ProcessingStatusPage />} />
+                  <Route path="/creator/processing" element={<ProcessingStatusPage />} />
               </Route>
               <Route element={<ProtectedRoute allowedRoles={["Learner"]} />}>
                 <Route path="/dashboard/learner" element={<Dashboard />} />
@@ -37,6 +42,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/educator/upload" element={<VideoUploadPage />} />
                 <Route path="/educator/content" element={<VideoLibraryPage heading="Educational content" description="Review the lecture videos and educational materials you manage." />} />
                 <Route path="/educator/transcripts" element={<VideoLibraryPage heading="Lecture transcripts" description="Generate, review, edit, and download transcripts for your lectures." />} />
+                <Route path="/educator/key-moments/:videoId" element={<VideoKeyMomentsPage />} />
                 <Route path="/educator/classroom" element={<RoleFeaturePage title="Classroom Content" description="Keep classroom-ready lessons together for your learners." endpoint="/rbac/educator/content" />} />
               </Route>
               <Route element={<ProtectedRoute allowedRoles={["Administrator"]} />}>
@@ -44,6 +50,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/admin/users" element={<RoleFeaturePage title="Users" description="Review and manage platform accounts." endpoint="/rbac/admin/users" />} />
                 <Route path="/admin/roles" element={<RoleFeaturePage title="Roles" description="Inspect the platform access structure." endpoint="/rbac/admin/users" />} />
                 <Route path="/admin/activity" element={<UploadHistoryPage administrator />} />
+                <Route path="/admin/analytics" element={<AnalyticsPage />} />
                 <Route path="/admin/monitoring" element={<RoleFeaturePage title="System Monitoring" description="Check service readiness and platform health." endpoint="/rbac/admin/platform" />} />
               </Route>
               <Route path="/profile" element={<Profile />} />

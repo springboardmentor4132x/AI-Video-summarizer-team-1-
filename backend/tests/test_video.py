@@ -50,9 +50,9 @@ def configure_test_app(monkeypatch, tmp_path):
     Base.metadata.drop_all(bind=engine)
 
 
-def create_user(email: str) -> User:
+def create_user(email: str, role: str = "Content Creator") -> User:
     db = TestingSessionLocal()
-    user = User(name="Video User", email=email, password="hash", role="learner")
+    user = User(name="Video User", email=email, password="hash", role=role)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -292,7 +292,7 @@ def test_background_processing_creates_and_updates_one_transcript(monkeypatch, t
     summary = db.query(Summary).filter(Summary.transcript_id == transcripts[0].id).first()
     db.close()
     assert summary is not None
-    assert summary.status == SummaryStatus.NOT_STARTED
+    assert summary.status == SummaryStatus.PENDING
     assert not list(video_router.UPLOAD_DIR.glob("*_transcription.wav"))
 
 def test_background_processing_handles_audio_extraction_failure(monkeypatch, tmp_path):
@@ -703,6 +703,17 @@ def test_key_moments_saved_when_one_highlight_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(video_router, "process_video", fake_process_video)
     monkeypatch.setattr(video_router, "extract_audio", fake_extract_audio)
     monkeypatch.setattr(video_router, "transcribe_audio", fake_transcribe_audio)
+    # This test covers mixed highlight persistence, not semantic selection.
+    # Patch the symbol used by the background router so two valid candidates
+    # deterministically reach the mixed highlight extractor.
+    monkeypatch.setattr(
+        video_router,
+        "detect_key_moments",
+        lambda *_args, **_kwargs: [
+            SimpleNamespace(start_time=0.0, end_time=2.0, title="First idea", topic="Topic A", importance_score=0.8, text="First complete idea."),
+            SimpleNamespace(start_time=3.0, end_time=5.0, title="Second idea", topic="Topic B", importance_score=0.7, text="Second complete idea."),
+        ],
+    )
 
     good_path = str(tmp_path / "highlights" / "clip_0.mp4")
 

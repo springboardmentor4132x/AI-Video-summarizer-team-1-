@@ -6,6 +6,9 @@ import importlib
 import os
 from pathlib import Path
 from typing import Any, Literal
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 TranscriptionStatus = Literal["queued", "processing", "completed", "failed"]
@@ -60,6 +63,7 @@ def transcribe_audio(
     try:
         model = load_whisper_model(model_name)
     except Exception as exc:
+        logger.exception("Whisper model could not be loaded")
         return TranscriptionResult(
             status="failed",
             error_code="model_load_failed",
@@ -73,6 +77,7 @@ def transcribe_audio(
     try:
         raw_result = model.transcribe(str(input_file), **options)
     except Exception as exc:
+        logger.exception("Whisper transcription failed")
         return TranscriptionResult(
             status="failed",
             error_code="transcription_failed",
