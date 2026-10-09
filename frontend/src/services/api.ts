@@ -49,6 +49,7 @@ export interface VideoListItem {
   file_size_bytes: number;
   duration_seconds: number | null;
   processing_status: string;
+  status?: string;
   source_type?: "UPLOAD" | "YOUTUBE";
   source_url?: string | null;
   uploaded_at: string;
@@ -504,12 +505,18 @@ export function getVideoStatuses(token: string, limit = 500) {
   });
 }
 
-export function getVideos(token: string, limit = 500) {
+export async function getVideos(token: string, limit = 500): Promise<VideoListItem[]> {
   ensureValidAuthorization(token);
   const params = new URLSearchParams({ limit: String(limit) });
-  return request<VideoListItem[]>(`/videos/?${params.toString()}`, {
+  
+  const videos = await request<any[]>(`/videos/?${params.toString()}`, {
     headers: getAuthHeaders(token),
   });
+  
+  return videos.map(v => ({
+    ...v,
+    processing_status: v.processing_status || v.status
+  }));
 }
 
 export function deleteVideo(token: string, videoId: string | number) {

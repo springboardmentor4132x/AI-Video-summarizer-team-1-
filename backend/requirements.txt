@@ -22,3 +22,4 @@ transformers>=4.36.0
 sentence-transformers>=3.0
 openai-whisper
 openai-whisper
+yt-dlp

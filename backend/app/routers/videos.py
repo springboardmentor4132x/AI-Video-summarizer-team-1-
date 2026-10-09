@@ -282,7 +282,6 @@ def generate_summary(video_id: int, db: Session = Depends(get_db), current_user=
     db.commit()
     db.refresh(summary)
     return _summary_payload(summary)
-  feature/namrata-docker-ui-fixes
 
 
 @router.get("/")
@@ -296,7 +295,23 @@ def list_videos(db: Session = Depends(get_db), current_user=Depends(get_current_
             "id": video.id,
             "filename": video.filename,
             "status": video.status,
+            "file_size": video.file_size or 0,
+            "duration": video.duration,
             "created_at": video.created_at.isoformat() if video.created_at else None,
         }
         for video in videos
     ]
+
+
+import subprocess
+
+def get_duration(path: str) -> float | None:
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=30,
+        )
+        return float(r.stdout.strip())
+    except Exception:
+        return None

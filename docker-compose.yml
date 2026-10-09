@@ -19,6 +19,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - WHISPER_MODEL=tiny
       - DATABASE_URL=postgresql://postgres:localpassword@db:5432/clipmind_db
       - SECRET_KEY=super-secret-local-key
       - ALGORITHM=HS256

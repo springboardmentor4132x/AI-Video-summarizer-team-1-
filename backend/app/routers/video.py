@@ -11,6 +11,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -20,12 +21,18 @@ from app.schemas.user import UserRole
 from app.models.summary import Summary, SummaryStatus
 from app.models.transcript import Transcript, TranscriptStatus
 from app.models.video import Video
+from app.models.key_moment import KeyMoment
 from app.schemas.video import VideoResponse, VideoStatusResponse
 from app.services.ffmpeg_service import extract_audio, process_video
+from app.services.summarization_service import summarize_transcript
 from app.services.highlight_service import extract_highlights_for_key_moments
 from app.services.key_moment_service import detect_key_moments, save_key_moments
 from app.services.transcription_service import transcribe_audio
 
+from sqlalchemy import BigInteger, Float, Column
+
+file_size = Column(BigInteger, nullable=False, default=0)
+duration = Column(Float, nullable=True)   # seconds
 
 router = APIRouter(
     prefix="/videos",
@@ -117,8 +124,28 @@ def process_video_background(
             return
         logger.info("FFmpeg processing completed for video_id: %s", video_id)
         
-        # Update file_path to point to the processed video with proper audio encoding
         video.file_path = output_path
+        
+        # --- NEW CODE: EXTRACT FILE SIZE & DURATION ---
+        try:
+            import subprocess
+            
+            # 1. Get file size in bytes
+            video.file_size_bytes = Path(output_path).stat().st_size
+            
+            # 2. Get duration in seconds using ffprobe
+            duration_cmd = [
+                "ffprobe", "-v", "error", "-show_entries",
+                "format=duration", "-of",
+                "default=noprint_wrappers=1:nokey=1", str(output_path)
+            ]
+            duration_str = subprocess.check_output(duration_cmd, text=True).strip()
+            if duration_str:
+                video.duration_seconds = int(float(duration_str))
+        except Exception as e:
+            logger.warning(f"Could not extract size/duration for video {video_id}: {e}")
+        # --- END NEW CODE ---
+        
         db.commit()
 
         transcript.status = TranscriptStatus.PROCESSING
@@ -167,18 +194,33 @@ def process_video_background(
             .first()
         )
         if summary is None:
-            summary = Summary(
-                transcript_id=transcript.id,
-                status=SummaryStatus.PENDING,
-            )
-            db.add(summary)
+            try:
+                summary = Summary(transcript_id=transcript.id, status=SummaryStatus.PROCESSING)
+                db.add(summary)
+                db.commit()
+            except Exception:
+                db.rollback()
         else:
             summary.short_summary = None
             summary.detailed_summary = None
-            summary.status = SummaryStatus.PENDING
-        logger.info("Summary initialization completed for video_id: %s", video_id)
+            summary.status = SummaryStatus.PROCESSING
+            db.commit()
+            
+        # Actually generate the AI Summary automatically!
+        try:
+            logger.info("Generating AI summary in background...")
+            sum_result = summarize_transcript(transcript)
+            summary.short_summary = sum_result.short_summary
+            summary.detailed_summary = sum_result.detailed_summary
+            summary.status = SummaryStatus.COMPLETED
+            db.commit()
+            logger.info("Background summary generation completed!")
+        except Exception as e:
+            logger.error(f"Background summary generation failed: {e}")
+            summary.status = SummaryStatus.FAILED
+            db.commit()
 
-        segments = transcript.segments
+        segments = transcript.segments or []
         if not segments:
             logger.info("No transcription segments for video_id: %s, skipping Module 3", video_id)
             video.status = "completed"
@@ -186,6 +228,7 @@ def process_video_background(
             return
 
         logger.info("Starting Module 3 key moments detection for video_id: %s", video_id)
+        segments = transcript.segments if hasattr(transcript, 'segments') else []
         moments = detect_key_moments(
             segments,
             threshold=0.30,
@@ -318,9 +361,11 @@ async def upload_video(
 
     video = Video(
         user_id=current_user.id,
-        filename=original_filename,
+        filename=file.filename,
         file_path=str(input_path),
         status="uploaded",
+        file_size=total_size,
+        duration=get_duration(str(input_path)),
     )
     try:
         db.add(video)
@@ -445,7 +490,6 @@ async def process_youtube_video(
     input_path = UPLOAD_DIR / f"{video_uuid}.mp4"
     output_path = UPLOAD_DIR / f"{video_uuid}_processed.mp4"
     
-    # Create the database record immediately so the UI sees it
     video = Video(
         user_id=current_user.id,
         filename=f"YouTube Video - {video_uuid[:8]}",
@@ -460,26 +504,125 @@ async def process_youtube_video(
         db_bg = SessionLocal()
         vid = db_bg.query(Video).filter(Video.id == vid_id).first()
         try:
-            # Download via yt-dlp
-            subprocess.run([
+            logger.info(f"Starting YouTube download for: {yt_url}")
+            
+            # capture_output lets us see exactly why YouTube blocks it
+            result = subprocess.run([
                 "yt-dlp", 
                 "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4", 
                 "-o", str(in_path), 
                 yt_url
-            ], check=True)
+            ], capture_output=True, text=True)
             
+            if result.returncode != 0:
+                logger.error(f"yt-dlp failed! Error: {result.stderr}")
+                vid.status = "failed"
+                db_bg.commit()
+                return
+            
+            logger.info("YouTube download successful!")
             vid.status = "uploaded"
             db_bg.commit()
             db_bg.close()
             
-            # Send to standard processing pipeline
+            # Send to standard AI processing pipeline
             process_video_background(vid_id, str(in_path), str(out_path))
         except Exception as e:
+            logger.error(f"Unexpected error in YouTube script: {str(e)}")
             vid.status = "failed"
             db_bg.commit()
             db_bg.close()
 
-    # Run the download and AI pipeline in the background
     background_tasks.add_task(download_and_process, video.id, payload.youtube_url, input_path, output_path)
-    
     return video
+
+@router.delete("/{video_id}")
+def delete_video_endpoint(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """Permanently delete a video and its files."""
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+        
+    # Delete the physical mp4 file from your hard drive
+    if video.file_path:
+        remove_file(video.file_path)
+        
+    # Delete from the database
+    db.delete(video)
+    db.commit()
+    
+    return {"message": "Video deleted successfully", "video_id": video.id}
+
+    from app.models.key_moment import KeyMoment
+
+@router.get("/{video_id}/mcqs")
+def get_video_mcqs(
+    video_id: int, 
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Fetch or generate MCQs for a specific video."""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    moments = db.query(KeyMoment).filter(KeyMoment.video_id == video_id).all()
+    mcqs = []
+    
+    # Generate 3 different questions per Key Moment to ensure a large pool!
+    if moments:
+        for m in moments:
+            # Question Variation 1
+            mcqs.append({
+                "question": f"Regarding the topic '{m.topic or 'the video'}', which of the following best describes the takeaway at {int(m.start_time)} seconds?",
+                "options": [m.text, "This section was about off-topic remarks.", "The speaker contradicted this point.", "None of the above."],
+                "correct_answer": m.text,
+                "explanation": f"Based on the AI-detected key moment: '{m.title}'.",
+                "difficulty": "Medium",
+                "topic": m.topic or "General",
+                "source": "Key Moments",
+                "timestamp": m.start_time
+            })
+            # Question Variation 2
+            mcqs.append({
+                "question": f"What is the main significance of the section titled '{m.title}'?",
+                "options": [m.text, "It introduces the speaker.", "It concludes the video.", "It is a sponsor shoutout."],
+                "correct_answer": m.text,
+                "explanation": f"This is the core detail from {int(m.start_time)}s.",
+                "difficulty": "Easy",
+                "topic": m.topic or "General",
+                "source": "Key Moments",
+                "timestamp": m.start_time
+            })
+            # Question Variation 3
+            mcqs.append({
+                "question": f"At {int(m.start_time)} seconds, the video discusses {m.topic or 'a specific concept'}. Which statement is true?",
+                "options": [m.text, "The concept was skipped entirely.", "It was mentioned but deemed unimportant.", "The video stated the exact opposite."],
+                "correct_answer": m.text,
+                "explanation": f"Derived directly from the '{m.title}' moment.",
+                "difficulty": "Hard",
+                "topic": m.topic or "General",
+                "source": "Key Moments",
+                "timestamp": m.start_time
+            })
+            
+    # Fallback: if no key moments exist, generate a batch of 10 fallback questions so the UI never breaks
+    if not mcqs:
+        for i in range(10):
+            mcqs.append({
+                "question": f"Question {i+1}: What is the primary subject of this video?",
+                "options": [video.filename, "Unknown Topic", "Audio Test", "None of the above"],
+                "correct_answer": video.filename,
+                "explanation": "This is a fallback question because AI key moments were not found.",
+                "difficulty": "Easy",
+                "topic": "General",
+                "source": "Fallback",
+                "timestamp": 0
+            })
+            
+    return mcqs

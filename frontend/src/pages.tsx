@@ -128,8 +128,7 @@ function Dashboard() {
             return response.json();
           }).catch(() => null);
 
-          return { transcript: Boolean(transcript), summary: Boolean(summary), keyMoments: Array.isArray(keyMoments) ? keyMoments.length : 0 };
-        }));
+          return { transcript: Boolean(transcript), summary: Boolean(summary), keyMoments: Array.isArray(keyMoments?.key_moments) ? keyMoments.key_moments.length : 0 };          }));
 
         const totals = results.reduce((acc, result) => {
           if (result.status !== "fulfilled") return acc;
@@ -691,7 +690,22 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
       {loading && <div className="history-skeleton-list" role="status" aria-label="Loading upload history">{[1, 2, 3].map(item => <div className="history-skeleton-row" key={`skeleton-${item}`}><span /><span /><span /><span /></div>)}</div>}
         {!loading && latestEvents.length === 0 && <div className="feature-placeholder history-empty"><span className="eyebrow">No uploads yet</span><h2>Start your video workspace</h2><p>Upload your first video to start generating transcripts, summaries, and key moments.</p><Link className="primary-button" to="/creator/upload">Upload Video</Link></div>}
       {!loading && latestEvents.length > 0 && filteredEvents.length === 0 && <div className="history-empty-filter">No uploads match the current search and filters.</div>}
-      {!loading && filteredEvents.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th>{administrator && <th>Owner</th>}<th>Uploaded</th><th>Size</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>{filteredEvents.map(event => { const video = videos.find(item => item.id === event.video_id); return <tr key={event.video_id}><td><div className="history-video-cell"><span className="history-file-icon"><FileText size={17} /></span><span><strong>{event.filename}</strong><small>{event.source_type} · {event.filename.split(".").pop()?.toUpperCase() || "FILE"}</small></span></div></td>{administrator && <td>{event.owner_name}</td>}<td><strong>{new Date(event.timestamp).toLocaleDateString()}</strong><small>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></td><td>{formatFileSize(event.file_size_bytes)}</td><td>{event.duration_seconds === null ? "Not available" : formatDuration(event.duration_seconds)}</td><td><span className={`event-status ${event.status?.toLowerCase()}`}>{event.status}</span><small className="history-note">{event.notes ?? "No lifecycle note"}</small></td><td><div className="history-actions">{video && <button className="mini-button" type="button" onClick={() => setSelectedVideo(video)} aria-label={`Play ${event.filename}`}>Play</button>}<Link className="mini-button neutral" to={administrator ? `/admin/activity` : `/creator/transcripts/${event.video_id}`}>View</Link><button className="mini-button danger-text" type="button" onClick={() => setSelectedEvent(event)} disabled={deletingVideoId === event.video_id}>Delete</button></div></td></tr>; })}</tbody></table></div>}
+      {!loading && filteredEvents.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th>{administrator && <th>Owner</th>}<th>Uploaded</th><th>Size</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+        {filteredEvents.map(event => { 
+        const video = videos.find(item => item.id === event.video_id); 
+        // Force the event status to match the actual video's final status
+        const displayStatus = video && video.processing_status ? video.processing_status : event.status;
+        return <tr key={event.video_id}>
+            <td>
+              <div className="history-video-cell">
+                <span className="history-file-icon"><FileText size={17} /></span>
+                <span><strong>{event.filename}</strong>
+                <small>{event.source_type} · {event.filename.split(".").pop()?.toUpperCase() || "FILE"}</small>
+                </span>
+              </div>
+            </td>{administrator && <td>{event.owner_name}</td>}<td><strong>{new Date(event.timestamp).toLocaleDateString()}</strong><small>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></td><td>{formatFileSize(event.file_size_bytes)}</td><td>{event.duration_seconds === null ? "Not available" : formatDuration(event.duration_seconds)}</td>
+            <td><span className={`event-status ${displayStatus?.toLowerCase()}`}>{displayStatus}</span><small className="history-note">{event.notes ?? "No lifecycle note"}</small></td>
+            <td><div className="history-actions">{video && <button className="mini-button" type="button" onClick={() => setSelectedVideo(video)} aria-label={`Play ${event.filename}`}>Play</button>}<Link className="mini-button neutral" to={administrator ? `/admin/activity` : `/creator/transcripts/${event.video_id}`}>View</Link><button className="mini-button danger-text" type="button" onClick={() => setSelectedEvent(event)} disabled={deletingVideoId === event.video_id}>Delete</button></div></td></tr>; })}</tbody></table></div>}
     </>}
     {selectedEvent && <DeleteConfirmationModal video={videos.find(video => video.id === selectedEvent.video_id) ?? { id: selectedEvent.video_id, filename: selectedEvent.filename, mime_type: "", file_size_bytes: 0, duration_seconds: null, processing_status: selectedEvent.status, uploaded_at: selectedEvent.timestamp, owner_id: selectedEvent.owner_id, owner_name: selectedEvent.owner_name }} isDeleting={deletingVideoId === selectedEvent.video_id} onConfirm={() => void confirmDelete()} onCancel={() => setSelectedEvent(null)} />}
     {selectedVideo && token && <VideoPlayerModal video={selectedVideo} token={token} onClose={() => setSelectedVideo(null)} />}
@@ -858,14 +872,13 @@ function VideoPlayerModal({ video, token, onClose, initialTime }: { video: Video
     return () => window.removeEventListener("keydown", handleEscape);
   }, [onClose]);
 
-  function seekOnLoad(event: React.SyntheticEvent<HTMLVideoElement>) {
-    setIsLoading(false);
-    setError(null);
-    if (initialTime !== undefined) {
-      event.currentTarget.currentTime = initialTime;
-      void event.currentTarget.play().catch(() => undefined);
+  useEffect(() => {
+    // Wait until the video is loaded, then jump to the timestamp
+    if (!isLoading && videoRef.current && initialTime !== undefined) {
+      videoRef.current.currentTime = initialTime;
+      videoRef.current.play().catch(() => console.log("Browser blocked autoplay"));
     }
-  }
+  }, [isLoading, initialTime]);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -883,7 +896,8 @@ function VideoPlayerModal({ video, token, onClose, initialTime }: { video: Video
           muted={false}
           playsInline
           preload="metadata"
-          onLoadedData={seekOnLoad}
+          onLoadedMetadata={() => setIsLoading(false)}
+          onLoadedData={() => setIsLoading(false)}
           onError={() => {
             setIsLoading(false);
             setError("This video could not be loaded. Please verify the uploaded file is still available.");
@@ -895,6 +909,7 @@ function VideoPlayerModal({ video, token, onClose, initialTime }: { video: Video
       </div>
     </div>
   );
+  
 }
 
 type AnalysisKind = "transcript" | "summary" | "keyMoments";
@@ -935,7 +950,28 @@ export function TranscriptModalContent({ data, onRetry, onSeek, onClose }: { dat
             <label className="analysis-search" aria-label="Search transcript"><Search size={14} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search transcript..." /></label>
           </div>
           {transcript.status === "FAILED" && <div className="analysis-state analysis-error" role="alert"><strong>Transcript generation failed</strong><p>{transcript.error_message || "The transcript could not be generated."}</p><button className="secondary-button" type="button" onClick={onRetry}>Retry</button></div>}
-          {transcript.status !== "FAILED" && <div className="transcript-modal-list">{segments.length === 0 ? <p className="analysis-muted">No transcript matches your search.</p> : segments.map((segment, index) => <button className="transcript-modal-segment" type="button" key={`${segment.start_time}-${index}`} onClick={() => onSeek(segment.start_time)}><time>{formatAnalysisTime(segment.start_time)}</time><span>{segment.text}</span></button>)}</div>}
+          {transcript.status !== "FAILED" && (
+            <div className="transcript-modal-list">
+              {segments.length === 0 ? (
+                <p className="analysis-muted">No transcript matches your search.</p>
+              ) : (
+                segments.map((segment, index) => {
+                  const startTime = Number(segment.start_time ?? (segment as any).start ?? 0);
+                  return (
+                    <button
+                      className="transcript-modal-segment"
+                      type="button"
+                      key={`${startTime}-${index}`}
+                      onClick={() => onSeek(startTime)}
+                    >
+                      <time>{formatAnalysisTime(startTime)}</time>
+                      <span>{segment.text}</span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
           <div className="analysis-footer"><button className="secondary-button" type="button" onClick={onClose}>Close</button></div>
         </>
       )}
@@ -999,17 +1035,23 @@ export function MCQQuizPage() {
     if (!token) return;
     const accessToken = token ?? "";
     async function loadVideos() {
-      try {
-        setLoadingVideos(true);
-        setError(null);
-        const nextVideos = await getVideos(accessToken, 500);
-        setVideos(nextVideos.filter(video => (video.processing_status || (video as any).status || "") === "COMPLETED"));
-      } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "The video library could not be loaded.");
-      } finally {
-        setLoadingVideos(false);
-      }
+    try {
+      setLoadingVideos(true);
+      setError(null);
+      const nextVideos = await getVideos(accessToken, 500);
+      
+      // Update this filter to allow all variations of 'Completed' to pass through to the state
+      setVideos(nextVideos.filter(video => {
+        const status = String(video.processing_status || (video as any).status || "").toUpperCase();
+        return ["COMPLETED", "READY_FOR_AI"].includes(status);
+      }));
+      
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The video library could not be loaded.");
+    } finally {
+      setLoadingVideos(false);
     }
+  }
     void loadVideos();
   }, [token]);
 
@@ -1100,7 +1142,7 @@ export function MCQQuizPage() {
               <span style={{ fontWeight: 600 }}>Select Video:</span>
               <select value={selectedVideoId} onChange={event => setSelectedVideoId(event.target.value)} aria-label="Select Video" style={{ padding: "0.75rem 0.9rem", borderRadius: 10, border: "1px solid #d1d5db" }} disabled={loadingVideos}>
                 <option value="">Choose a processed video</option>
-                {videos.map(video => (
+                {videos.filter(v => ["COMPLETED", "READY_FOR_AI"].includes(String(v.processing_status || v.status).toUpperCase())).map(video => (
                   <option key={video.id} value={video.id}>{video.filename}</option>
                 ))}
               </select>
@@ -1821,6 +1863,7 @@ export function VideoResultsPage() {
 
   const progressPercent = Math.min(100, Math.round(((progressSteps.filter(step => step.complete).length / progressSteps.length) * 100)));
 
+  
   return (
     <section className="simple-page result-shell">
       <div className="result-header-card">
@@ -1902,12 +1945,15 @@ export function VideoResultsPage() {
               {filteredSegments.length === 0 ? (
                 <p>No transcript matches your current search.</p>
               ) : (
-                filteredSegments.map((segment, index) => (
-                  <article className="transcript-line" key={`${segment.start_time}-${segment.end_time}-${index}`}>
-                    <time>{formatClock(segment.start_time)}</time>
-                    <p>{highlightText(segment.text, search)}</p>
-                  </article>
-                ))
+                filteredSegments.map((segment, index) => {
+                  const startTime = Number(segment.start_time ?? (segment as any).start ?? 0);
+                  return (
+                    <article className="transcript-line" key={`${startTime}-${index}`}>
+                      <time>{formatClock(startTime)}</time>
+                      <p>{highlightText(segment.text, search)}</p>
+                    </article>
+                  );
+                })
               )}
             </div>
             <div className="card-actions-row">
