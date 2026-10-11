@@ -1,4 +1,5 @@
 import logging
+import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -29,7 +30,7 @@ from app.services.highlight_service import extract_highlights_for_key_moments
 from app.services.key_moment_service import detect_key_moments, save_key_moments
 from app.services.transcription_service import transcribe_audio
 
-from sqlalchemy import BigInteger, Float, Column
+from sqlalchemy import BigInteger, Float, Column, text
 
 file_size = Column(BigInteger, nullable=False, default=0)
 duration = Column(Float, nullable=True)   # seconds
@@ -68,7 +69,20 @@ ALLOWED_EXTENSIONS = {
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 
-
+def get_duration(file_path: str) -> int:
+    """Extract video duration in seconds using ffprobe."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return int(float(result.stdout.strip()))
+    except Exception as e:
+        print(f"Warning: Could not extract duration - {e}")
+        return 0  # Fallback to 0 so the upload doesn't crash if ffprobe fails
+    
 def remove_file(path: Path | str) -> None:
     """Best-effort cleanup for a file created during upload or processing."""
     try:
@@ -364,8 +378,8 @@ async def upload_video(
         filename=file.filename,
         file_path=str(input_path),
         status="uploaded",
-        file_size=total_size,
-        duration=get_duration(str(input_path)),
+        file_size_bytes=total_size,                         # Added this back
+        duration_seconds=get_duration(str(input_path))
     )
     try:
         db.add(video)
@@ -626,3 +640,28 @@ def get_video_mcqs(
             })
             
     return mcqs
+
+@router.get("/fix-db")
+def fix_db_columns(db: Session = Depends(get_db)):
+    """Temporary route to safely add missing columns one by one."""
+    results = []
+    
+    # Try adding file_size_bytes
+    try:
+        db.execute(text("ALTER TABLE videos ADD COLUMN file_size_bytes INTEGER DEFAULT 0;"))
+        db.commit()
+        results.append("Successfully added file_size_bytes!")
+    except Exception as e:
+        db.rollback()
+        results.append("file_size_bytes already exists.")
+
+    # Try adding duration_seconds
+    try:
+        db.execute(text("ALTER TABLE videos ADD COLUMN duration_seconds FLOAT;"))
+        db.commit()
+        results.append("Successfully added duration_seconds!")
+    except Exception as e:
+        db.rollback()
+        results.append("duration_seconds already exists.")
+
+    return {"status": "Database check complete!", "details": results}
