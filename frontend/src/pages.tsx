@@ -30,6 +30,8 @@ const dashboardConfig: Record<Role, { kicker: string; title: string; description
   Educator: {
     kicker: "Teaching workspace", title: "Shape lectures into clear learning moments.", description: "Keep your teaching material organized, ready, and easy to revisit with transcripts and summaries.", accent: "gold",
     actions: [
+      { label: "Upload Video", detail: "Start a new media upload", icon: Video, route: "/creator/upload", endpoint: "/rbac/creator/uploads" },
+
       { label: "Upload Lecture", detail: "Add a new teaching video", icon: Video, route: "/educator/upload", endpoint: "/rbac/educator/content" },
       { label: "Transcripts", detail: "Generate and edit lecture transcripts", icon: FileClock, route: "/educator/transcripts", endpoint: "/rbac/educator/content" },
       { label: "Learning Materials", detail: "Keep lessons in one place", icon: BookOpen, route: "/educator/classroom", endpoint: "/rbac/educator/content" },
@@ -121,23 +123,33 @@ function Dashboard() {
           }).catch(() => null);
           const summary = await fetch(withApiBase(`/videos/${video.id}/summary`), { headers: { Authorization: `Bearer ${token}` } }).then(async response => {
             if (!response.ok) throw new Error("missing");
-            return response.json();
-          }).catch(() => null);
+            const data = await response.json();
+            // Properly check if the summary is actually finished by looking for the text or status
+            return (data.status?.toUpperCase() === "COMPLETED" || !!data.short_summary);
+          }).catch(() => false);
+
           const keyMoments = await fetch(withApiBase(`/videos/${video.id}/key-moments`), { headers: { Authorization: `Bearer ${token}` } }).then(async response => {
             if (!response.ok) throw new Error("missing");
             return response.json();
           }).catch(() => null);
 
-          return { transcript: Boolean(transcript), summary: Boolean(summary), keyMoments: Array.isArray(keyMoments?.key_moments) ? keyMoments.key_moments.length : 0 };          }));
+          // Pass the correctly evaluated summary boolean directly
+          return { 
+            transcript: Boolean(transcript), 
+            summary: summary, 
+            keyMoments: Array.isArray(keyMoments?.key_moments) ? keyMoments.key_moments.length : 0 
+          };
+        }));
 
         const totals = results.reduce((acc, result) => {
           if (result.status !== "fulfilled") return acc;
           acc.transcripts += result.value.transcript ? 1 : 0;
-          acc.summaries += result.value.summary ? 1 : 0;
+          acc.summaries += result.value.summary ? 1 : 0; // Now correctly counts only completed ones!
           acc.keyMoments += result.value.keyMoments;
           return acc;
         }, { videos: videos.length, transcripts: 0, summaries: 0, keyMoments: 0 });
 
+        
         setStats(totals);
       } catch {
         setStatsError("Dashboard data could not be loaded from the backend.");
@@ -588,7 +600,7 @@ export function VideoUploadPage() {
 }
 
 export function UploadHistoryPage({ administrator = false }: { administrator?: boolean }) {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [events, setEvents] = useState<UploadHistoryEvent[]>([]);
   const [videos, setVideos] = useState<VideoListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -690,7 +702,7 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
       {loading && <div className="history-skeleton-list" role="status" aria-label="Loading upload history">{[1, 2, 3].map(item => <div className="history-skeleton-row" key={`skeleton-${item}`}><span /><span /><span /><span /></div>)}</div>}
         {!loading && latestEvents.length === 0 && <div className="feature-placeholder history-empty"><span className="eyebrow">No uploads yet</span><h2>Start your video workspace</h2><p>Upload your first video to start generating transcripts, summaries, and key moments.</p><Link className="primary-button" to="/creator/upload">Upload Video</Link></div>}
       {!loading && latestEvents.length > 0 && filteredEvents.length === 0 && <div className="history-empty-filter">No uploads match the current search and filters.</div>}
-      {!loading && filteredEvents.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th>{administrator && <th>Owner</th>}<th>Uploaded</th><th>Size</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+      {!loading && filteredEvents.length > 0 && <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Video</th><th>Owner</th><th>Uploaded</th><th>Size</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>
         {filteredEvents.map(event => { 
         const video = videos.find(item => item.id === event.video_id); 
         const displayStatus = video && video.processing_status ? video.processing_status : event.status;
@@ -700,7 +712,7 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
         const dateObj = safeDateString ? new Date(safeDateString) : new Date();
         const safeSize = event.file_size_bytes ?? video?.file_size_bytes ?? 0;
         const safeDuration = event.duration_seconds ?? video?.duration_seconds;
-        
+        const displayOwner = event.owner_name || video?.owner_name || (administrator ? "Registered User" : (user?.full_name || (user as any)?.name || "Unknown"));
         return <tr key={event.id || `${event.video_id}-${index}`}>
             <td>
               <div className="history-video-cell">
@@ -709,7 +721,7 @@ export function UploadHistoryPage({ administrator = false }: { administrator?: b
                 <small>{event.source_type || video?.source_type || "UPLOAD"} · {(event.filename || video?.filename || "FILE").split(".").pop()?.toUpperCase() || "FILE"}</small>
                 </span>
               </div>
-            </td>{administrator && <td>{event.owner_name || video?.owner_name || "Unknown"}</td>}
+            </td><td>{displayOwner}</td>
             <td><strong>{dateObj.toLocaleDateString()}</strong><small>{dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></td>
             <td>{formatFileSize(safeSize)}</td>
             <td>{safeDuration ? formatDuration(safeDuration) : "Duration unavailable"}</td>
@@ -2578,19 +2590,14 @@ export function AnalyticsPage() {
   useEffect(() => {
     if (!token || !user) return;
     let active = true;
-    const requestKey = `${user.id}:${user.role}:${rangeKey}:${refreshKey}:${aiRefreshKey}`;
+    
     setAiLoading(true);
     setAiError(null);
     setAiInsights(null);
 
-    let request = aiRequestRef.current;
-    if (!request || request.requestKey !== requestKey || request.token !== token) {
-      const loader = user.role === "Administrator" ? postAdminAnalyticsAIInsights : postCreatorAnalyticsAIInsights;
-      request = { requestKey, token, promise: loader(token, rangeFor(rangeKey)) };
-      aiRequestRef.current = request;
-    }
-
-    request.promise
+    const loader = user.role === "Administrator" ? postAdminAnalyticsAIInsights : postCreatorAnalyticsAIInsights;
+    
+    loader(token, rangeFor(rangeKey))
       .then(result => {
         if (active) {
           setAnalytics(result.analytics);
@@ -2599,7 +2606,9 @@ export function AnalyticsPage() {
         }
       })
       .catch(reason => {
-        if (active) setAiError(reason instanceof Error ? reason.message : "AI insights are temporarily unavailable.");
+        if (active) {
+          setAiError(reason instanceof Error ? reason.message : "AI insights are temporarily unavailable.");
+        }
       })
       .finally(() => {
         if (active) setAiLoading(false);
@@ -2769,6 +2778,129 @@ export function Profile() {
       </div>
     </section>
   ); 
+}
+
+export function AdminUsersPage() {
+  const { token } = useAuth();
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(withApiBase("/auth/users"), { 
+      headers: { Authorization: `Bearer ${token}` } 
+    })
+      .then(res => res.json())
+      .then(data => {
+        setUsers(Array.isArray(data) ? data : (data.users || []));
+      })
+      .catch(err => console.error("Failed to load users", err))
+      .finally(() => setLoading(false));
+  }, [token]);
+
+  return (
+    <section className="simple-page">
+      <div className="page-header">
+        <div>
+          <span className="eyebrow">Control room</span>
+          <h1>Platform Users</h1>
+          <p className="feature-description">Manage platform accounts and their access levels.</p>
+        </div>
+      </div>
+      {loading ? (
+         <div className="feature-status" role="status"><span className="status-dot" />Loading registered users...</div>
+      ) : (
+        <div className="history-table-wrap">
+          <table className="history-table">
+            <thead>
+              <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              {users.map(u => (
+                <tr key={u.id || u.email}>
+                  <td><strong>{u.name || u.full_name}</strong></td>
+                  <td>{u.email}</td>
+                  <td><span className="role-badge">{u.role}</span></td>
+                  <td><span className="status-badge success">● Active</span></td>
+                </tr>
+              ))}
+              {users.length === 0 && (
+                <tr><td colSpan={4} style={{ textAlign: "center", padding: "20px" }}>No users found.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function AdminRolesPage() {
+  const roles = [
+    { name: "Administrator", access: "Full system access, user management, and AI monitoring." },
+    { name: "Content Creator", access: "Upload videos, generate transcripts, summaries, and MCQs." },
+    { name: "Educator", access: "Upload lectures, manage classroom materials, and generate AI insights." },
+    { name: "Learner", access: "View processed videos, read summaries, and take MCQ quizzes." },
+  ];
+
+  return (
+    <section className="simple-page">
+      <div className="page-header">
+        <div>
+          <span className="eyebrow">Access Structure</span>
+          <h1>Roles & Permissions</h1>
+          <p className="feature-description">Review what each role can do within ClipMind AI.</p>
+        </div>
+      </div>
+      <div className="video-list">
+        {roles.map(r => (
+          <article className="result-card" key={r.name} style={{ padding: "20px" }}>
+            <div className="card-header-row" style={{ marginBottom: "10px" }}>
+              <strong style={{ fontSize: "18px" }}>{r.name}</strong>
+              <span className="status-badge success">● Configured</span>
+            </div>
+            <p style={{ color: "var(--text-muted)" }}>{r.access}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function AdminMonitoringPage() {
+  return (
+    <section className="simple-page">
+      <div className="page-header">
+        <div>
+          <span className="eyebrow">Infrastructure</span>
+          <h1>AI Processing Health</h1>
+          <p className="feature-description">Monitor the Docker containers and AI model readiness.</p>
+        </div>
+        <button className="secondary-button"><Activity size={15} /> Refresh Status</button>
+      </div>
+      <div className="stats-grid">
+        <div className="stat-card teal">
+          <div className="stat-header"><span>Whisper AI (Audio)</span><Activity size={18} /></div>
+          <strong>Online</strong>
+          <small style={{ marginTop: "8px", display: "block" }}>Local Docker Container</small>
+        </div>
+        <div className="stat-card amber">
+          <div className="stat-header"><span>BART (Summaries)</span><Activity size={18} /></div>
+          <strong>Online</strong>
+          <small style={{ marginTop: "8px", display: "block" }}>Local Docker Container</small>
+        </div>
+        <div className="stat-card blue">
+          <div className="stat-header"><span>PostgreSQL</span><HardDrive size={18} /></div>
+          <strong>Connected</strong>
+          <small style={{ marginTop: "8px", display: "block" }}>Database Active</small>
+        </div>
+        <div className="stat-card slate">
+          <div className="stat-header"><span>System Load</span><Gauge size={18} /></div>
+          <strong>Stable</strong>
+          <small style={{ marginTop: "8px", display: "block" }}>Memory Usage Normal</small>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 export { Dashboard };

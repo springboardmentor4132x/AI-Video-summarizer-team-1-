@@ -121,9 +121,26 @@ def process_video_background(
             )
             db.add(transcript)
             db.flush()
-
         video.status = "processing"
         db.commit()
+        db.refresh(transcript)
+
+        summary = (
+            db.query(Summary)
+            .filter(Summary.transcript_id == transcript.id)
+            .first()
+        )
+
+        if summary is None:
+            try:
+                summary = Summary(
+                    transcript_id=transcript.id,
+                    status=SummaryStatus.PENDING,
+                )
+                db.add(summary)
+                db.commit()
+            except Exception:
+                db.rollback()
 
         logger.info("Starting FFmpeg processing for video_id: %s", video_id)
         succeeded = process_video(
@@ -575,70 +592,142 @@ def delete_video_endpoint(
     from app.models.key_moment import KeyMoment
 
 @router.get("/{video_id}/mcqs")
+@router.get("/{video_id}/mcqs")
 def get_video_mcqs(
-    video_id: int, 
+    video_id: int,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
-    """Fetch or generate MCQs for a specific video."""
+    """Generate content-grounded MCQs from key moments, summaries, and transcript segments."""
+    import random
+    import re
+
     video = db.query(Video).filter(Video.id == video_id).first()
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    moments = db.query(KeyMoment).filter(KeyMoment.video_id == video_id).all()
+    moments = (
+        db.query(KeyMoment)
+        .filter(KeyMoment.video_id == video_id)
+        .order_by(KeyMoment.start_time.asc())
+        .all()
+    )
+    transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
+    summary = (
+        db.query(Summary).filter(Summary.transcript_id == transcript.id).first()
+        if transcript
+        else None
+    )
+
+    def clean_statement(text: str, max_len: int = 140) -> str:
+        if not text: return ""
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) <= max_len:
+            return text
+        return text[:max_len].rsplit(" ", 1)[0].rstrip(".,;:") + "..."
+
+    # Build a pool of real statements from the video to use as realistic wrong options
+    statement_pool: list[str] = []
+    for m in moments:
+        if m.text and len(m.text.strip()) > 20:
+            statement_pool.append(clean_statement(m.text))
+
+    if transcript and transcript.text:
+        raw_sents = [
+            s.strip()
+            for s in re.split(r"(?<=[.!?])\s+", transcript.text)
+            if len(s.strip()) > 35
+        ]
+        for s in raw_sents[:25]:
+            cleaned = clean_statement(s)
+            if cleaned not in statement_pool:
+                statement_pool.append(cleaned)
+
+    generic_distractors = [
+        "The speaker focuses strictly on administrative setup without covering core technical concepts.",
+        "This segment compares unrelated external case studies rather than the main topic.",
+        "The presenter reviews historical background without introducing actionable steps.",
+        "The discussion here centers on hardware troubleshooting and network latency issues.",
+        "This part of the presentation addresses licensing and regulatory compliance details."
+    ]
+
+    def build_options(correct: str) -> list[str]:
+        candidates = [
+            s for s in statement_pool
+            if s.lower() != correct.lower() and s[:25].lower() not in correct.lower()
+        ]
+        
+        # 1. Unseeded shuffle randomly picks distractors
+        random.shuffle(candidates)
+        distractors = candidates[:3]
+        
+        for g in generic_distractors:
+            if len(distractors) >= 3:
+                break
+            if g not in distractors and g.lower() != correct.lower():
+                distractors.append(g)
+                
+        options = [correct] + distractors[:3]
+        
+        # 2. Unseeded shuffle ensures the correct answer moves around randomly every time!
+        random.shuffle(options)  
+        return options
+
     mcqs = []
-    
-    # Generate 3 different questions per Key Moment to ensure a large pool!
-    if moments:
-        for m in moments:
-            # Question Variation 1
+
+    # 1. Summary-level comprehension question
+    if summary and summary.short_summary:
+        short_clean = clean_statement(summary.short_summary, 160)
+        mcqs.append({
+            "question": "Which of the following best summarizes the primary takeaway of the entire video?",
+            "options": build_options(short_clean),
+            "correct_answer": short_clean,
+            "explanation": "Derived directly from the AI executive summary of the video.",
+            "difficulty": "Easy",
+            "topic": "Overall Summary",
+            "source": "AI Summary",
+            "timestamp": 0,
+        })
+
+    # 2. Sane Key-Moment comprehension questions
+    for idx, m in enumerate(moments):
+        correct_text = clean_statement(m.text or m.title)
+        if not correct_text:
+            continue
+        
+        # 3. Prevent ugly long sentences from appearing in the question text
+        topic_label = (m.topic or "").strip()
+        if not topic_label or len(topic_label) > 35:
+            topic_label = "the discussed topic"
+            
+        mins, secs = divmod(int(m.start_time or 0), 60)
+        time_str = f"{mins}:{secs:02d}"
+
+        mcqs.append({
+            "question": f"At {time_str} in the video, what main point is emphasized regarding {topic_label}?",
+            "options": build_options(correct_text),
+            "correct_answer": correct_text,
+            "explanation": f"This is the core insight detected at {time_str}.",
+            "difficulty": "Medium" if idx % 2 == 0 else "Easy",
+            "topic": topic_label.title() if topic_label != "the discussed topic" else "Key Concept",
+            "source": "Key Moments",
+            "timestamp": m.start_time,
+        })
+
+    # 3. Transcript fallback if no key moments exist
+    if len(mcqs) < 3 and statement_pool:
+        for idx, stmt in enumerate(statement_pool[:3]):
             mcqs.append({
-                "question": f"Regarding the topic '{m.topic or 'the video'}', which of the following best describes the takeaway at {int(m.start_time)} seconds?",
-                "options": [m.text, "This section was about off-topic remarks.", "The speaker contradicted this point.", "None of the above."],
-                "correct_answer": m.text,
-                "explanation": f"Based on the AI-detected key moment: '{m.title}'.",
+                "question": "According to the video transcript, which of the following points is stated by the speaker?",
+                "options": build_options(stmt),
+                "correct_answer": stmt,
+                "explanation": "Extracted directly from the verified video transcript.",
                 "difficulty": "Medium",
-                "topic": m.topic or "General",
-                "source": "Key Moments",
-                "timestamp": m.start_time
+                "topic": "Transcript Comprehension",
+                "source": "Transcript",
+                "timestamp": 0,
             })
-            # Question Variation 2
-            mcqs.append({
-                "question": f"What is the main significance of the section titled '{m.title}'?",
-                "options": [m.text, "It introduces the speaker.", "It concludes the video.", "It is a sponsor shoutout."],
-                "correct_answer": m.text,
-                "explanation": f"This is the core detail from {int(m.start_time)}s.",
-                "difficulty": "Easy",
-                "topic": m.topic or "General",
-                "source": "Key Moments",
-                "timestamp": m.start_time
-            })
-            # Question Variation 3
-            mcqs.append({
-                "question": f"At {int(m.start_time)} seconds, the video discusses {m.topic or 'a specific concept'}. Which statement is true?",
-                "options": [m.text, "The concept was skipped entirely.", "It was mentioned but deemed unimportant.", "The video stated the exact opposite."],
-                "correct_answer": m.text,
-                "explanation": f"Derived directly from the '{m.title}' moment.",
-                "difficulty": "Hard",
-                "topic": m.topic or "General",
-                "source": "Key Moments",
-                "timestamp": m.start_time
-            })
-            
-    # Fallback: if no key moments exist, generate a batch of 10 fallback questions so the UI never breaks
-    if not mcqs:
-        for i in range(10):
-            mcqs.append({
-                "question": f"Question {i+1}: What is the primary subject of this video?",
-                "options": [video.filename, "Unknown Topic", "Audio Test", "None of the above"],
-                "correct_answer": video.filename,
-                "explanation": "This is a fallback question because AI key moments were not found.",
-                "difficulty": "Easy",
-                "topic": "General",
-                "source": "Fallback",
-                "timestamp": 0
-            })
-            
+
     return mcqs
 
 @router.get("/fix-db")
