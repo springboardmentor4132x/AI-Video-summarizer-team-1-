@@ -25,9 +25,10 @@ const roleNavigation: Record<Role, { label: string; path: string; icon: typeof F
     { label: "Learning Content", path: "/learner/content", icon: BookOpen },
   ],
   Educator: [
-    { label: "Lecture Videos", path: "/educator/content", icon: Film },
+    { label: "Lecture Videos", path: "/educator/transcripts", icon: Film },
+    { label: "Upload Video", path: "/educator/upload", icon: Upload },
     { label: "Transcripts", path: "/educator/transcripts", icon: FileText },
-    { label: "Summaries", path: "/educator/content", icon: Sparkles },
+    // { label: "Summaries", path: "/educator/content", icon: Sparkles },
     { label: "Learning Materials", path: "/educator/classroom", icon: BookOpen },
   ],
   Administrator: [

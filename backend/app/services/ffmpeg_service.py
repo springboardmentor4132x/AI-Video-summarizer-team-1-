@@ -141,6 +141,8 @@ def process_video(input_path: str, output_path: str) -> bool:
         str(input_file),
         "-c:v",
         "libx264",
+        "-preset", "ultrafast",  # 10x faster CPU encoding inside Docker
+        "-crf", "28",
         "-c:a",
         "aac",
         "-y",

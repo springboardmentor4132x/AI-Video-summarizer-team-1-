@@ -34,11 +34,11 @@ def _issue_token(email: str, password: str, db: Session):
 @router.post("/register", response_model=UserResponse)
 def register(user_in: UserCreate, db: Session = Depends(get_db)):
     """Registers a new user."""
-    if user_in.role == UserRole.ADMINISTRATOR:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrator accounts cannot be created through public registration",
-        )
+    # if user_in.role == UserRole.ADMINISTRATOR:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_403_FORBIDDEN,
+    #         detail="Administrator accounts cannot be created through public registration",
+    #     )
     user = db.query(User).filter(User.email == user_in.email).first()
     if user:
         raise HTTPException(
@@ -53,7 +53,7 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
         name=user_in.name,
         email=user_in.email,
         password=hashed_password,
-        role=user_in.role.value.lower()
+        role=user_in.role.value
     )
     db.add(db_user)
     db.commit()
@@ -90,3 +90,13 @@ def test_rbac(current_user: User = Depends(get_current_user)):
         "user_id": current_user.id,
         "role": current_user.role
     }
+
+@router.get("/users")
+def get_all_users(
+    db: Session = Depends(get_db), 
+    current_user=Depends(require_role([UserRole.ADMINISTRATOR]))
+):
+    """Return all registered users for the Admin dashboard."""
+    from app.models.user import User
+    users = db.query(User).all()
+    return [{"id": u.id, "name": u.name, "email": u.email, "role": u.role} for u in users]

@@ -12,8 +12,9 @@ class Video(Base):
     file_path = Column(String, nullable=False)
     status = Column(String, nullable=False, default="uploaded")
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Processing tracking
+    file_size_bytes = Column(Integer, default=0)
+    duration_seconds = Column(Integer, nullable=True)
+
     processing_stage = Column(String, nullable=True)
     processing_error_code = Column(String, nullable=True)
     processing_error_message = Column(Text, nullable=True)

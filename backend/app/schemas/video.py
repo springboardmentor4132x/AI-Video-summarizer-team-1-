@@ -8,7 +8,8 @@ class VideoResponse(BaseModel):
     filename: str
     status: str
     uploaded_at: datetime
-
+    file_size_bytes: int = 0
+    duration_seconds: int | None = None
     model_config = ConfigDict(from_attributes=True)
 
 

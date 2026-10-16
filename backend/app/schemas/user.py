@@ -11,11 +11,13 @@ class UserRole(str, Enum):
 class UserBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
-    role: UserRole
+    role: str
 
     @field_validator('role', mode='before')
     @classmethod
     def normalize_role(cls, v):
+        if isinstance(v, Enum):
+            return v.value
         if isinstance(v, str):
             return v.title()
         return v

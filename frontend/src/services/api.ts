@@ -470,14 +470,34 @@ export async function checkPermission(path: string, token: string) {
   });
 }
 
-export function uploadVideo(token: string, file: File) {
+export async function uploadVideo(token: string, file: File): Promise<any> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  // Using native fetch instead of a wrapper prevents 'application/json' from being forced
+  const response = await fetch("http://localhost:8000/videos/upload", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`
+      // CRITICAL: Do NOT add a Content-Type header here. The browser must do it automatically.
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Video upload failed");
+  }
+  
+  return response.json();
+}
+
+export function processYouTubeVideo(token: string, youtubeUrl: string) {
   ensureValidAuthorization(token);
-  const body = new FormData();
-  body.append("file", file);
-  return request<VideoUploadResponse>("/videos/upload", {
+  return request<YouTubeVideoResponse>("/videos/youtube", {
     method: "POST",
     headers: getAuthHeaders(token),
-    body,
+    body: JSON.stringify({ youtube_url: youtubeUrl }),
   });
 }
 
@@ -611,4 +631,46 @@ export async function downloadTranscript(token: string, videoId: string | number
     throw new ApiError(response.status, message);
   }
   return response.blob();
+}
+
+// --- AI Analytics Types & Functions ---
+
+export interface AnalyticsAttentionItem {
+  title: string;
+  description: string;
+  severity: "low" | "medium" | "high";
+}
+
+export interface AnalyticsAIInsights {
+  overview: string;
+  key_insight: string;
+  attention: AnalyticsAttentionItem[];
+  content_insight: string;
+  usage_insight: string;
+  summary_insight: string;
+  keyword_insight: string;
+  recommendations: string[];
+}
+
+export interface AnalyticsAIResponse {
+  analytics: AnalyticsDashboard;
+  ai_insights: AnalyticsAIInsights;
+}
+
+export async function postAdminAnalyticsAIInsights(token: string, range?: AnalyticsRange): Promise<AnalyticsAIResponse> {
+  ensureValidAuthorization(token);
+  const params = new URLSearchParams(range as Record<string, string>);
+  return request<AnalyticsAIResponse>(`/admin/analytics/ai-insights?${params.toString()}`, {
+    method: "POST",
+    headers: getAuthHeaders(token),
+  });
+}
+
+export async function postCreatorAnalyticsAIInsights(token: string, range?: AnalyticsRange): Promise<AnalyticsAIResponse> {
+  ensureValidAuthorization(token);
+  const params = new URLSearchParams(range as Record<string, string>);
+  return request<AnalyticsAIResponse>(`/analytics/ai-insights?${params.toString()}`, {
+    method: "POST",
+    headers: getAuthHeaders(token),
+  });
 }

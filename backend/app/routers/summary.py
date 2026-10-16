@@ -25,8 +25,19 @@ def _get_owned_video(video_id: int, db: Session, current_user) -> Video:
 
 def _get_summary(video_id: int, db: Session, current_user) -> Summary:
     video = _get_owned_video(video_id, db, current_user)
-    if video.transcript is None or video.transcript.summary is None:
+    if video.transcript is None:
         raise HTTPException(status_code=404, detail="Summary not found")
+
+    if video.transcript.summary is None:
+        # If transcript is still processing/pending, create a PENDING summary placeholder
+        if video.transcript.status in (TranscriptStatus.PENDING, TranscriptStatus.PROCESSING):
+            summary = Summary(transcript_id=video.transcript.id, status=SummaryStatus.PENDING)
+            db.add(summary)
+            db.commit()
+            db.refresh(summary)
+            return summary
+        raise HTTPException(status_code=404, detail="Summary not found")
+
     return video.transcript.summary
 
 
@@ -41,17 +52,23 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
     transcript = video.transcript
     if transcript is None:
         raise HTTPException(status_code=404, detail="Transcript not found")
-    if transcript.status != TranscriptStatus.COMPLETED:
-        raise HTTPException(status_code=409, detail="Transcript must be completed before summarization")
 
     summary = transcript.summary
     if summary is None:
         summary = Summary(transcript_id=transcript.id, status=SummaryStatus.PENDING)
         db.add(summary)
-        db.flush()
+        db.commit()
+        db.refresh(summary)
 
-    if summary.status == SummaryStatus.PROCESSING:
-        raise HTTPException(status_code=409, detail="Summary generation is already in progress")
+    # If transcript is still processing, return the PENDING summary instead of a 409 error
+    if transcript.status in (TranscriptStatus.PENDING, TranscriptStatus.PROCESSING):
+        return summary
+
+    if transcript.status != TranscriptStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail="Transcript must be completed before summarization")
+
+    if summary.status == SummaryStatus.PROCESSING and not regenerate:
+        return summary
     if summary.status == SummaryStatus.COMPLETED and not regenerate:
         return summary
 
@@ -62,6 +79,7 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
         logger.exception("Summary database failure stage=mark_processing video_id=%s transcript_id=%s", video_id, transcript.id)
         db.rollback()
         raise HTTPException(status_code=500, detail="Summary generation failed") from exc
+
     summary_id = summary.id
     previous_values = None
     if regenerate and summary_id:
@@ -80,7 +98,6 @@ def _generate_summary(video_id: int, db: Session, current_user, regenerate: bool
         if summary_id:
             failed_summary = db.query(Summary).filter(Summary.id == summary_id).first()
             if failed_summary is not None:
-                # Keep the previous completed summary intact when a regeneration fails.
                 had_previous_summary = previous_values and (previous_values[1] or previous_values[2])
                 failed_summary.status = SummaryStatus.COMPLETED if had_previous_summary else SummaryStatus.FAILED
                 db.commit()
